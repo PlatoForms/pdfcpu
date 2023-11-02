@@ -219,7 +219,7 @@ type Configuration struct {
 //
 // If you want to disable config dir usage in a multi threaded environment
 // you are encouraged to use api.DisableConfigDir().
-var ConfigPath string = "default"
+var ConfigPath string = "disable"
 
 var loadedDefaultConfig *Configuration
 
