@@ -20,16 +20,11 @@ package cli
 import (
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
-	"github.com/pkg/errors"
 )
 
 // Validate inFile against ISO-32000-1:2008.
 func Validate(cmd *Command) ([]string, error) {
-	conf := cmd.Conf
-	if conf != nil && conf.ValidationMode == model.ValidationNone {
-		return nil, errors.New("validate: mode == ValidationNone")
-	}
-	return nil, api.ValidateFiles(cmd.InFiles, conf)
+	return nil, api.ValidateFiles(cmd.InFiles, cmd.Conf)
 }
 
 // Optimize inFile and write result to outFile.
@@ -59,7 +54,7 @@ func ChangeOwnerPassword(cmd *Command) ([]string, error) {
 
 // ListPermissions of inFile.
 func ListPermissions(cmd *Command) ([]string, error) {
-	return ListPermissionsFile(*cmd.InFile, cmd.Conf)
+	return ListPermissionsFile(cmd.InFiles, cmd.Conf)
 }
 
 // SetPermissions of inFile.
@@ -70,6 +65,11 @@ func SetPermissions(cmd *Command) ([]string, error) {
 // Split inFile into single page PDFs and write result files to outDir.
 func Split(cmd *Command) ([]string, error) {
 	return nil, api.SplitFile(*cmd.InFile, *cmd.OutDir, cmd.IntVal, cmd.Conf)
+}
+
+// Split inFile along pages and write result files to outDir.
+func SplitByPageNr(cmd *Command) ([]string, error) {
+	return nil, api.SplitByPageNrFile(*cmd.InFile, *cmd.OutDir, cmd.IntVals, cmd.Conf)
 }
 
 // Trim inFile and write result to outFile.
@@ -115,7 +115,7 @@ func InsertPages(cmd *Command) ([]string, error) {
 	if cmd.Mode == model.INSERTPAGESAFTER {
 		before = false
 	}
-	return nil, api.InsertPagesFile(*cmd.InFile, *cmd.OutFile, cmd.PageSelection, before, cmd.Conf)
+	return nil, api.InsertPagesFile(*cmd.InFile, *cmd.OutFile, cmd.PageSelection, before, cmd.PageConf, cmd.Conf)
 }
 
 // RemovePages removes selected pages.
@@ -125,12 +125,17 @@ func RemovePages(cmd *Command) ([]string, error) {
 
 // MergeCreate merges inFiles in the order specified and writes the result to outFile.
 func MergeCreate(cmd *Command) ([]string, error) {
-	return nil, api.MergeCreateFile(cmd.InFiles, *cmd.OutFile, cmd.Conf)
+	return nil, api.MergeCreateFile(cmd.InFiles, *cmd.OutFile, cmd.BoolVal1, cmd.Conf)
+}
+
+// MergeCreateZip zips two inFiles in the order specified and writes the result to outFile.
+func MergeCreateZip(cmd *Command) ([]string, error) {
+	return nil, api.MergeCreateZipFile(cmd.InFiles[0], cmd.InFiles[1], *cmd.OutFile, cmd.Conf)
 }
 
 // MergeAppend merges inFiles in the order specified and writes the result to outFile.
 func MergeAppend(cmd *Command) ([]string, error) {
-	return nil, api.MergeAppendFile(cmd.InFiles, *cmd.OutFile, cmd.Conf)
+	return nil, api.MergeAppendFile(cmd.InFiles, *cmd.OutFile, cmd.BoolVal1, cmd.Conf)
 }
 
 // ExtractImages dumps embedded image resources from inFile into outDir for selected pages.
@@ -180,7 +185,7 @@ func ExtractAttachments(cmd *Command) ([]string, error) {
 
 // ListInfo gathers information about inFile and returns the result as []string.
 func ListInfo(cmd *Command) ([]string, error) {
-	return ListInfoFiles(cmd.InFiles, cmd.PageSelection, cmd.BoolVal, cmd.Conf)
+	return ListInfoFiles(cmd.InFiles, cmd.PageSelection, cmd.BoolVal1, cmd.BoolVal2, cmd.Conf)
 }
 
 // CreateCheatSheetsFonts creates single page PDF cheat sheets for user fonts in current dir.
@@ -270,11 +275,29 @@ func ListImages(cmd *Command) ([]string, error) {
 	return ListImagesFile(cmd.InFiles, cmd.PageSelection, cmd.Conf)
 }
 
+// UpdateImages replaces image objects.
+func UpdateImages(cmd *Command) ([]string, error) {
+	var (
+		objNr  int
+		pageNr int
+		id     string
+	)
+	if cmd.IntVal > 0 {
+		if cmd.StringVal != "" {
+			pageNr = cmd.IntVal
+			id = cmd.StringVal
+		} else {
+			objNr = cmd.IntVal
+		}
+	}
+	return nil, api.UpdateImagesFile(cmd.InFiles[0], cmd.InFiles[1], *cmd.OutFile, objNr, pageNr, id, cmd.Conf)
+}
+
 // Dump known object to stdout.
 func Dump(cmd *Command) ([]string, error) {
-	hex := cmd.IntVals[0] == 1
+	mode := cmd.IntVals[0]
 	objNr := cmd.IntVals[1]
-	return nil, api.DumpObjectFile(*cmd.InFile, objNr, hex, cmd.Conf)
+	return nil, api.DumpObjectFile(*cmd.InFile, mode, objNr, cmd.Conf)
 }
 
 // Create renders page content corresponding to declarations found in inFileJSON and writes the result to outFile.
@@ -320,7 +343,7 @@ func FillFormFields(cmd *Command) ([]string, error) {
 
 // MultiFillFormFields fills out multiple instances of inFile's form using JSON or CSV data.
 func MultiFillFormFields(cmd *Command) ([]string, error) {
-	return nil, api.MultiFillFormFile(*cmd.InFile, *cmd.InFileJSON, *cmd.OutDir, *cmd.OutFile, cmd.BoolVal, cmd.Conf)
+	return nil, api.MultiFillFormFile(*cmd.InFile, *cmd.InFileJSON, *cmd.OutDir, *cmd.OutFile, cmd.BoolVal1, cmd.Conf)
 }
 
 // Resize selected pages and write result to outFile.
@@ -355,10 +378,65 @@ func ExportBookmarks(cmd *Command) ([]string, error) {
 
 // ImportBookmarks creates/replaces outlines of inFile corresponding to declarations found in inJSONFile and writes the result to outFile.
 func ImportBookmarks(cmd *Command) ([]string, error) {
-	return nil, api.ImportBookmarksFile(*cmd.InFile, *cmd.InFileJSON, *cmd.OutFile, cmd.BoolVal, cmd.Conf)
+	return nil, api.ImportBookmarksFile(*cmd.InFile, *cmd.InFileJSON, *cmd.OutFile, cmd.BoolVal1, cmd.Conf)
 }
 
 // RemoveBookmarks erases outlines of inFile.
 func RemoveBookmarks(cmd *Command) ([]string, error) {
 	return nil, api.RemoveBookmarksFile(*cmd.InFile, *cmd.OutFile, cmd.Conf)
+}
+
+// ListPageLayout returns inFile's page layout.
+func ListPageLayout(cmd *Command) ([]string, error) {
+	return api.ListPageLayoutFile(*cmd.InFile, cmd.Conf)
+}
+
+// SetPageLayout sets inFile's page layout.
+func SetPageLayout(cmd *Command) ([]string, error) {
+	pageLayout := model.PageLayoutFor(cmd.StringVal)
+	return nil, api.SetPageLayoutFile(*cmd.InFile, *cmd.OutFile, *pageLayout, cmd.Conf)
+}
+
+// ResetPageLayout resets inFile's page layout.
+func ResetPageLayout(cmd *Command) ([]string, error) {
+	return nil, api.ResetPageLayoutFile(*cmd.InFile, *cmd.OutFile, cmd.Conf)
+}
+
+// ListPageMode returns inFile's page mode.
+func ListPageMode(cmd *Command) ([]string, error) {
+	return api.ListPageModeFile(*cmd.InFile, cmd.Conf)
+}
+
+// SetPageMode sets inFile's page mode.
+func SetPageMode(cmd *Command) ([]string, error) {
+	pageMode := model.PageModeFor(cmd.StringVal)
+	return nil, api.SetPageModeFile(*cmd.InFile, *cmd.OutFile, *pageMode, cmd.Conf)
+}
+
+// ResetPageMode resets inFile's page mode.
+func ResetPageMode(cmd *Command) ([]string, error) {
+	return nil, api.ResetPageModeFile(*cmd.InFile, *cmd.OutFile, cmd.Conf)
+}
+
+// ListViewerPreferences returns inFile's viewer preferences.
+func ListViewerPreferences(cmd *Command) ([]string, error) {
+	return api.ListViewerPreferencesFile(*cmd.InFile, cmd.BoolVal1, cmd.BoolVal2, cmd.Conf)
+}
+
+// SetViewerPreferences sets inFile's viewer preferences.
+func SetViewerPreferences(cmd *Command) ([]string, error) {
+	if *cmd.InFileJSON != "" {
+		return nil, api.SetViewerPreferencesFileFromJSONFile(*cmd.InFile, *cmd.OutFile, *cmd.InFileJSON, cmd.Conf)
+	}
+	return nil, api.SetViewerPreferencesFileFromJSONBytes(*cmd.InFile, *cmd.OutFile, []byte(cmd.StringVal), cmd.Conf)
+}
+
+// ResetViewerPreferences resets inFile's viewer preferences.
+func ResetViewerPreferences(cmd *Command) ([]string, error) {
+	return nil, api.ResetViewerPreferencesFile(*cmd.InFile, *cmd.OutFile, cmd.Conf)
+}
+
+// Zoom in/out of selected pages either by zoom factor or corresponding margin.
+func Zoom(cmd *Command) ([]string, error) {
+	return nil, api.ZoomFile(*cmd.InFile, *cmd.OutFile, cmd.PageSelection, cmd.Zoom, cmd.Conf)
 }

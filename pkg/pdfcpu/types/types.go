@@ -17,12 +17,9 @@ limitations under the License.
 package types
 
 import (
-	"bytes"
 	"encoding/hex"
 	"fmt"
 	"strconv"
-
-	"github.com/pkg/errors"
 )
 
 // Supported line delimiters
@@ -149,7 +146,12 @@ func (i Integer) Value() int {
 
 // Point represents a user space location.
 type Point struct {
-	X, Y float64
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+func NewPoint(x, y float64) Point {
+	return Point{X: x, Y: y}
 }
 
 // Translate modifies p's coordinates.
@@ -164,38 +166,13 @@ func (p Point) String() string {
 
 // Rectangle represents a rectangular region in userspace.
 type Rectangle struct {
-	LL, UR Point
+	LL Point `json:"ll"`
+	UR Point `json:"ur"`
 }
 
 // NewRectangle returns a new rectangle for given corner coordinates.
 func NewRectangle(llx, lly, urx, ury float64) *Rectangle {
 	return &Rectangle{LL: Point{llx, lly}, UR: Point{urx, ury}}
-}
-
-// RectForArray returns a new rectangle for given Array.
-func RectForArray(a Array) (*Rectangle, error) {
-
-	llx, err := a.FloatNumber(0)
-	if err != nil {
-		return nil, err
-	}
-
-	lly, err := a.FloatNumber(1)
-	if err != nil {
-		return nil, err
-	}
-
-	urx, err := a.FloatNumber(2)
-	if err != nil {
-		return nil, err
-	}
-
-	ury, err := a.FloatNumber(3)
-	if err != nil {
-		return nil, err
-	}
-
-	return NewRectangle(llx, lly, urx, ury), nil
 }
 
 // RectForDim returns a new rectangle for given dimensions.
@@ -303,6 +280,34 @@ func (r Rectangle) CroppedCopy(margin float64) *Rectangle {
 	return NewRectangle(r.LL.X+margin, r.LL.Y+margin, r.UR.X-margin, r.UR.Y-margin)
 }
 
+// ToInches converts r to inches.
+func (r Rectangle) ToInches() *Rectangle {
+	return NewRectangle(r.LL.X*userSpaceToInch, r.LL.Y*userSpaceToInch, r.UR.X*userSpaceToInch, r.UR.Y*userSpaceToInch)
+}
+
+// ToCentimetres converts r to centimetres.
+func (r Rectangle) ToCentimetres() *Rectangle {
+	return NewRectangle(r.LL.X*userSpaceToCm, r.LL.Y*userSpaceToCm, r.UR.X*userSpaceToCm, r.UR.Y*userSpaceToCm)
+}
+
+// ToMillimetres converts r to millimetres.
+func (r Rectangle) ToMillimetres() *Rectangle {
+	return NewRectangle(r.LL.X*userSpaceToMm, r.LL.Y*userSpaceToMm, r.UR.X*userSpaceToMm, r.UR.Y*userSpaceToMm)
+}
+
+// ConvertToUnit converts r to unit.
+func (r *Rectangle) ConvertToUnit(unit DisplayUnit) *Rectangle {
+	switch unit {
+	case INCHES:
+		return r.ToInches()
+	case CENTIMETRES:
+		return r.ToCentimetres()
+	case MILLIMETRES:
+		return r.ToMillimetres()
+	}
+	return r
+}
+
 func (r Rectangle) formatToInches() string {
 	return fmt.Sprintf("(%3.2f, %3.2f, %3.2f, %3.2f) w=%.2f h=%.2f ar=%.2f",
 		r.LL.X*userSpaceToInch,
@@ -349,25 +354,26 @@ func (r Rectangle) Format(unit DisplayUnit) string {
 	return r.String()
 }
 
-// FloatNumber returns the element at index ind of a numbers array and returns a float64.
-func (a Array) FloatNumber(ind int) (float64, error) {
-	f, ok := a[ind].(Float)
-	if ok {
-		return f.Value(), nil
-	}
-	i, ok := a[ind].(Integer)
-	if ok {
-		return float64(i.Value()), nil
-	}
-	return 0, errors.Errorf("pdfcpu: array element %d not a number (Float/Integer", ind)
-}
-
 ///////////////////////////////////////////////////////////////////////////////////
 
 // QuadLiteral is a polygon with four edges and four vertices.
 // The four vertices are assumed to be specified in counter clockwise order.
 type QuadLiteral struct {
 	P1, P2, P3, P4 Point
+}
+
+func NewQuadLiteralForRect(r *Rectangle) *QuadLiteral {
+	// p1 := Point{X: r.LL.X, Y: r.LL.Y}
+	// p2 := Point{X: r.UR.X, Y: r.LL.Y}
+	// p3 := Point{X: r.UR.X, Y: r.UR.Y}
+	// p4 := Point{X: r.LL.X, Y: r.UR.Y}
+
+	p3 := Point{X: r.LL.X, Y: r.LL.Y}
+	p4 := Point{X: r.UR.X, Y: r.LL.Y}
+	p2 := Point{X: r.UR.X, Y: r.UR.Y}
+	p1 := Point{X: r.LL.X, Y: r.UR.Y}
+
+	return &QuadLiteral{P1: p1, P2: p2, P3: p3, P4: p4}
 }
 
 // Array returns the PDF representation of ql.
@@ -422,41 +428,21 @@ func (nameObject Name) Clone() Object {
 }
 
 func (nameObject Name) String() string {
-	return fmt.Sprint(string(nameObject))
+	return string(nameObject)
 }
 
 // PDFString returns a string representation as found in and written to a PDF file.
 func (nameObject Name) PDFString() string {
 	s := " "
 	if len(nameObject) > 0 {
-		s = string(nameObject)
+		s = EncodeName(string(nameObject))
 	}
 	return fmt.Sprintf("/%s", s)
 }
 
 // Value returns a string value for this PDF object.
 func (nameObject Name) Value() string {
-
-	s := string(nameObject)
-	var b bytes.Buffer
-
-	for i := 0; i < len(s); {
-		c := s[i]
-		if c != '#' {
-			b.WriteByte(c)
-			i++
-			continue
-		}
-
-		// # detected, next 2 chars have to exist.
-		// This gets checked during parsing.
-		s1 := s[i+1 : i+3]
-		b1, _ := hex.DecodeString(s1)
-		b.WriteByte(b1[0])
-		i += 3
-	}
-
-	return b.String()
+	return nameObject.String()
 }
 
 ///////////////////////////////////////////////////////////////////////////////////
@@ -586,7 +572,8 @@ func ToUserSpace(f float64, unit DisplayUnit) float64 {
 // like a PDF page, a sheet of paper or an image grid
 // in user space, inches, centimetres or millimetres.
 type Dim struct {
-	Width, Height float64
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 // ToInches converts d to inches.
@@ -599,7 +586,7 @@ func (d Dim) ToCentimetres() Dim {
 	return Dim{d.Width * userSpaceToCm, d.Height * userSpaceToCm}
 }
 
-// ToMillimetres converts d to centimetres.
+// ToMillimetres converts d to millimetres.
 func (d Dim) ToMillimetres() Dim {
 	return Dim{d.Width * userSpaceToMm, d.Height * userSpaceToMm}
 }
@@ -633,5 +620,5 @@ func (d Dim) Portrait() bool {
 }
 
 func (d Dim) String() string {
-	return fmt.Sprintf("%fx%f points", d.Width, d.Height)
+	return fmt.Sprintf("%fx%f", d.Width, d.Height)
 }

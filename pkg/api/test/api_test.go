@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -111,6 +112,7 @@ func imageFileNames(t *testing.T, dir string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sort.Strings(fn)
 	return fn
 }
 
@@ -184,6 +186,8 @@ func TestValidate(t *testing.T) {
 	msg := "TestValidate"
 	inFile := filepath.Join(inDir, "Acroforms2.pdf")
 
+	//log.SetDefaultStatsLogger()
+
 	// Validate inFile.
 	if err := api.ValidateFile(inFile, nil); err != nil {
 		t.Fatalf("%s: %v\n", msg, err)
@@ -228,7 +232,7 @@ func TestInfo(t *testing.T) {
 	}
 	defer f.Close()
 
-	info, err := api.PDFInfo(f, inFile, nil, conf)
+	info, err := api.PDFInfo(f, inFile, nil, true, conf)
 	if err != nil {
 		t.Fatalf("%s: %v\n", msg, err)
 	}

@@ -17,6 +17,7 @@ limitations under the License.
 package types
 
 import (
+	"bytes"
 	"testing"
 )
 
@@ -52,9 +53,56 @@ func TestByteForOctalString(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
-			actual := ByteForOctalString(test.input)
-			if actual != test.expected {
-				t.Errorf("got %x; want %x", test.expected, actual)
+			got := ByteForOctalString(test.input)
+			if got != test.expected {
+				t.Errorf("got %x; want %x", got, test.expected)
+			}
+		})
+	}
+}
+
+func TestUnescapeStringWithOctal(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected []byte
+	}{
+		{
+			"\\5",
+			[]byte{0x05},
+		},
+		{
+			"\\5a",
+			[]byte{0x05, 'a'},
+		},
+		{
+			"\\5\\5",
+			[]byte{0x05, 0x05},
+		},
+		{
+			"\\53",
+			[]byte{'+'},
+		},
+		{
+			"\\53a",
+			[]byte{'+', 'a'},
+		},
+		{
+			"\\053",
+			[]byte{'+'},
+		},
+		{
+			"\\0053",
+			[]byte{0x05, '3'},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.input, func(t *testing.T) {
+			got, err := Unescape(test.input)
+			if err != nil {
+				t.Fail()
+			}
+			if !bytes.Equal(got, test.expected) {
+				t.Errorf("got %x; want %x", got, test.expected)
 			}
 		})
 	}
@@ -116,13 +164,37 @@ func TestDecodeName(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.input, func(t *testing.T) {
-			actual, err := DecodeName(test.input)
+			got, err := DecodeName(test.input)
 			if err != nil {
 				t.Fail()
 			}
-			if actual != test.expected {
-				t.Errorf("got %x; want %x", test.expected, actual)
+			if got != test.expected {
+				t.Errorf("got %x; want %x", got, test.expected)
 			}
 		})
+	}
+}
+
+func TestEncodeName(t *testing.T) {
+	testcases := []struct {
+		Input    string
+		Expected string
+	}{
+		{"Foo", "Foo"},
+		{"A#", "A#23"},
+		{"F#o", "F#23o"},
+		{"A;Name_With-Various***Characters?", "A;Name_With-Various***Characters?"},
+		{"1.2", "1.2"},
+		{"$$", "$$"},
+		{"@pattern", "@pattern"},
+		{".notdef", ".notdef"},
+		{"Lime Green", "Lime#20Green"},
+		{"paired()parentheses", "paired#28#29parentheses"},
+		{"The_Key_of_F#_Minor", "The_Key_of_F#23_Minor"},
+	}
+	for _, tc := range testcases {
+		if encoded := EncodeName(tc.Input); encoded != tc.Expected {
+			t.Errorf("expected %s for %s, got %s", tc.Expected, tc.Input, encoded)
+		}
 	}
 }

@@ -71,6 +71,17 @@ func initBoxesCmdMap() commandMap {
 	return m
 }
 
+func initConfigCmdMap() commandMap {
+	m := newCommandMap()
+	for k, v := range map[string]command{
+		"list":  {printConfiguration, nil, "", ""},
+		"reset": {resetConfiguration, nil, "", ""},
+	} {
+		m.register(k, v)
+	}
+	return m
+}
+
 func initFontsCmdMap() commandMap {
 	m := newCommandMap()
 	for k, v := range map[string]command{
@@ -103,7 +114,9 @@ func initFormCmdMap() commandMap {
 func initImagesCmdMap() commandMap {
 	m := newCommandMap()
 	for k, v := range map[string]command{
-		"list": {processListImagesCommand, nil, "", ""},
+		"list":    {processListImagesCommand, nil, "", ""},
+		"extract": {processExtractImagesCommand, nil, "", ""},
+		"update":  {processUpdateImagesCommand, nil, "", ""},
 	} {
 		m.register(k, v)
 	}
@@ -193,11 +206,48 @@ func initWatermarkCmdMap() commandMap {
 	return m
 }
 
+func initPageModeCmdMap() commandMap {
+	m := newCommandMap()
+	for k, v := range map[string]command{
+		"list":  {processListPageModeCommand, nil, "", ""},
+		"set":   {processSetPageModeCommand, nil, "", ""},
+		"reset": {processResetPageModeCommand, nil, "", ""},
+	} {
+		m.register(k, v)
+	}
+	return m
+}
+
+func initPageLayoutCmdMap() commandMap {
+	m := newCommandMap()
+	for k, v := range map[string]command{
+		"list":  {processListPageLayoutCommand, nil, "", ""},
+		"set":   {processSetPageLayoutCommand, nil, "", ""},
+		"reset": {processResetPageLayoutCommand, nil, "", ""},
+	} {
+		m.register(k, v)
+	}
+	return m
+}
+
+func initViewerPreferencesCmdMap() commandMap {
+	m := newCommandMap()
+	for k, v := range map[string]command{
+		"list":  {processListViewerPreferencesCommand, nil, "", ""},
+		"set":   {processSetViewerPreferencesCommand, nil, "", ""},
+		"reset": {processResetViewerPreferencesCommand, nil, "", ""},
+	} {
+		m.register(k, v)
+	}
+	return m
+}
+
 func initCommandMap() {
 	annotsCmdMap := initAnnotsCmdMap()
 	attachCmdMap := initAttachCmdMap()
 	bookmarksCmdMap := initBookmarksCmdMap()
 	boxesCmdMap := initBoxesCmdMap()
+	configCmdMap := initConfigCmdMap()
 	fontsCmdMap := initFontsCmdMap()
 	formCmdMap := initFormCmdMap()
 	imagesCmdMap := initImagesCmdMap()
@@ -208,6 +258,9 @@ func initCommandMap() {
 	propertiesCmdMap := initPropertiesCmdMap()
 	stampCmdMap := initStampCmdMap()
 	watermarkCmdMap := initWatermarkCmdMap()
+	pageModeCmdMap := initPageModeCmdMap()
+	pageLayoutCmdMap := initPageLayoutCmdMap()
+	viewerPrefsCmdMap := initViewerPreferencesCmdMap()
 
 	cmdMap = newCommandMap()
 
@@ -220,7 +273,7 @@ func initCommandMap() {
 		"changeopw":     {processChangeOwnerPasswordCommand, nil, usageChangeOwnerPW, usageLongChangeOwnerPW},
 		"changeupw":     {processChangeUserPasswordCommand, nil, usageChangeUserPW, usageLongChangeUserPW},
 		"collect":       {processCollectCommand, nil, usageCollect, usageLongCollect},
-		"config":        {printConfiguration, nil, usageConfig, usageLongConfig},
+		"config":        {nil, configCmdMap, usageConfig, usageLongConfig},
 		"create":        {processCreateCommand, nil, usageCreate, usageLongCreate},
 		"crop":          {processCropCommand, nil, usageCrop, usageLongCrop},
 		"cut":           {processCutCommand, nil, usageCut, usageLongCut},
@@ -240,6 +293,8 @@ func initCommandMap() {
 		"ndown":         {processNDownCommand, nil, usageNDown, usageLongNDown},
 		"nup":           {processNUpCommand, nil, usageNUp, usageLongNUp},
 		"optimize":      {processOptimizeCommand, nil, usageOptimize, usageLongOptimize},
+		"pagelayout":    {nil, pageLayoutCmdMap, usagePageLayout, usageLongPageLayout},
+		"pagemode":      {nil, pageModeCmdMap, usagePageMode, usageLongPageMode},
 		"pages":         {nil, pagesCmdMap, usagePages, usageLongPages},
 		"paper":         {printPaperSizes, nil, usagePaper, usageLongPaper},
 		"permissions":   {nil, permissionsCmdMap, usagePerm, usageLongPerm},
@@ -255,21 +310,33 @@ func initCommandMap() {
 		"validate":      {processValidateCommand, nil, usageValidate, usageLongValidate},
 		"watermark":     {nil, watermarkCmdMap, usageWatermark, usageLongWatermark},
 		"version":       {printVersion, nil, usageVersion, usageLongVersion},
+		"viewerpref":    {nil, viewerPrefsCmdMap, usageViewerPreferences, usageLongViewerPreferences},
+		"zoom":          {processZoomCommand, nil, usageZoom, usageLongZoom},
 	} {
 		cmdMap.register(k, v)
 	}
 }
 
 func initFlags() {
+	flag.BoolVar(&all, "all", false, "")
+	flag.BoolVar(&all, "a", false, "")
 
 	bookmarksUsage := "create bookmarks while merging"
-	flag.BoolVar(&bookmarks, "bookmarks", true, bookmarksUsage)
-	flag.BoolVar(&bookmarks, "b", true, bookmarksUsage)
+	flag.BoolVar(&bookmarks, "bookmarks", false, bookmarksUsage)
+	flag.BoolVar(&bookmarks, "b", false, bookmarksUsage)
 
 	confUsage := "the config directory path | skip | none"
 	flag.StringVar(&conf, "config", "", confUsage)
 	flag.StringVar(&conf, "conf", "", confUsage)
 	flag.StringVar(&conf, "c", "", confUsage)
+
+	dividerPageUsage := "create divider pages while merging"
+	flag.BoolVar(&dividerPage, "dividerPage", false, dividerPageUsage)
+	flag.BoolVar(&dividerPage, "d", false, dividerPageUsage)
+
+	fontsUsage := "include font info"
+	flag.BoolVar(&fonts, "fonts", false, fontsUsage)
+	flag.BoolVar(&fonts, "f", false, fontsUsage)
 
 	jsonUsage := "produce JSON output"
 	flag.BoolVar(&json, "json", false, jsonUsage)
@@ -283,9 +350,17 @@ func initFlags() {
 	flag.BoolVar(&links, "links", false, linksUsage)
 	flag.BoolVar(&links, "l", false, linksUsage)
 
-	modeUsage := "validate: strict|relaxed; extract: image|font|content|page|meta; encrypt: rc4|aes, stamp:text|image/pdf"
+	modeUsage := "validate: strict|relaxed; extract: image|font|content|page|meta; encrypt: rc4|aes; stamp:text|image/pdf"
 	flag.StringVar(&mode, "mode", "", modeUsage)
 	flag.StringVar(&mode, "m", "", modeUsage)
+
+	flag.BoolVar(&offline, "offline", false, "")
+	flag.BoolVar(&offline, "off", false, "")
+	flag.BoolVar(&offline, "o", false, "")
+
+	optimizeUsage := "merge: optimize before writing"
+	flag.BoolVar(&optimize, "optimize", false, optimizeUsage)
+	flag.BoolVar(&optimize, "opt", false, optimizeUsage)
 
 	selectedPagesUsage := "a comma separated list of pages or page ranges, see pdfcpu selectedpages"
 	flag.StringVar(&selectedPages, "pages", "", selectedPagesUsage)
@@ -312,17 +387,18 @@ func initFlags() {
 	flag.StringVar(&unit, "unit", "", unitUsage)
 	flag.StringVar(&unit, "u", "", unitUsage)
 
+	flag.StringVar(&upw, "upw", "", "user password")
+	flag.StringVar(&opw, "opw", "", "owner password")
+
 	flag.BoolVar(&verbose, "verbose", false, "")
 	flag.BoolVar(&verbose, "v", false, "")
 	flag.BoolVar(&veryVerbose, "vv", false, "")
-
-	flag.StringVar(&upw, "upw", "", "user password")
-	flag.StringVar(&opw, "opw", "", "owner password")
 }
 
 func initLogging(verbose, veryVerbose bool) {
 	needStackTrace = verbose || veryVerbose
 	if quiet {
+		// TODO Need separate logger for command result output.
 		return
 	}
 

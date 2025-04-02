@@ -17,22 +17,24 @@ limitations under the License.
 package model
 
 import (
-	"encoding/hex"
+	"context"
+	"fmt"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"github.com/pkg/errors"
+
 	"github.com/pdfcpu/pdfcpu/pkg/log"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
-	"github.com/pkg/errors"
 )
 
 var (
 	errArrayCorrupt            = errors.New("pdfcpu: parse: corrupt array")
 	errArrayNotTerminated      = errors.New("pdfcpu: parse: unterminated array")
 	errDictionaryCorrupt       = errors.New("pdfcpu: parse: corrupt dictionary")
-	errDictionaryDuplicateKey  = errors.New("pdfcpu: parse: duplicate key")
 	errDictionaryNotTerminated = errors.New("pdfcpu: parse: unterminated dictionary")
+	errDictionaryDuplicateKey  = errors.New("pdfcpu: parse: duplicate key")
 	errHexLiteralCorrupt       = errors.New("pdfcpu: parse: corrupt hex literal")
 	errHexLiteralNotTerminated = errors.New("pdfcpu: parse: hex literal not terminated")
 	errNameObjectCorrupt       = errors.New("pdfcpu: parse: corrupt name object")
@@ -74,15 +76,15 @@ func positionToNextWhitespaceOrChar(s, chars string) (int, string) {
 	return -1, s
 }
 
-func positionToNextEOL(s string) string {
+func positionToNextEOL(s string) (string, int) {
 	for i, c := range s {
 		for _, m := range "\x0A\x0D" {
 			if c == m {
-				return s[i:]
+				return s[i:], i
 			}
 		}
 	}
-	return ""
+	return "", 0
 }
 
 // trimLeftSpace trims leading whitespace and trailing comment.
@@ -118,7 +120,7 @@ func trimLeftSpace(s string, relaxed bool) (string, bool) {
 			break
 		}
 		// trim PDF comment (= '%' up to eol)
-		s = positionToNextEOL(s)
+		s, _ = positionToNextEOL(s)
 		if log.ParseEnabled() {
 			log.Parse.Printf("2 outstr: <%s>\n", s)
 		}
@@ -292,7 +294,7 @@ func ParseObjectAttributes(line *string) (objectNumber *int, generationNumber *i
 	return objectNumber, generationNumber, nil
 }
 
-func parseArray(line *string) (*types.Array, error) {
+func parseArray(c context.Context, line *string) (*types.Array, error) {
 	if log.ParseEnabled() {
 		log.Parse.Println("ParseObject: value = Array")
 	}
@@ -329,7 +331,7 @@ func parseArray(line *string) (*types.Array, error) {
 
 	for !strings.HasPrefix(l, "]") {
 
-		obj, err := ParseObject(&l)
+		obj, err := ParseObjectContext(c, &l)
 		if err != nil {
 			return nil, err
 		}
@@ -385,10 +387,6 @@ func parseStringLiteral(line *string) (types.Object, error) {
 
 	if line == nil || len(*line) == 0 {
 		return nil, errBufNotAvailable
-	}
-
-	if log.ParseEnabled() {
-		log.Parse.Printf("ParseObject: value = String Literal: <%s>\n", *line)
 	}
 
 	l := *line
@@ -460,30 +458,13 @@ func parseHexLiteral(line *string) (types.Object, error) {
 	return types.HexLiteral(*hexStr), nil
 }
 
-func validateNameHexSequence(s string) error {
-	for i := 0; i < len(s); {
-		c := s[i]
-		if c != '#' {
-			i++
-			continue
-		}
-
-		// # detected, next 2 chars have to exist.
-		if len(s) < i+3 {
-			return errNameObjectCorrupt
-		}
-
-		s1 := s[i+1 : i+3]
-
-		// And they have to be hex characters.
-		_, err := hex.DecodeString(s1)
-		if err != nil {
-			return errNameObjectCorrupt
-		}
-
-		i += 3
+func decodeNameHexSequence(s string) (string, error) {
+	decoded, err := types.DecodeName(s)
+	if err != nil {
+		return "", errNameObjectCorrupt
 	}
-	return nil
+
+	return decoded, nil
 }
 
 func parseName(line *string) (*types.Name, error) {
@@ -517,8 +498,8 @@ func parseName(line *string) (*types.Name, error) {
 		l = l[:eok]
 	}
 
-	// Validate optional #xx sequences
-	err := validateNameHexSequence(l)
+	// Decode optional #xx sequences
+	l, err := decodeNameHexSequence(l)
 	if err != nil {
 		return nil, err
 	}
@@ -527,58 +508,76 @@ func parseName(line *string) (*types.Name, error) {
 	return &nameObj, nil
 }
 
-func processDictKeys(line *string, relaxed bool) (types.Dict, error) {
+func insertKey(d types.Dict, key string, val types.Object, relaxed bool) error {
+	if _, found := d[key]; !found {
+		d[key] = val
+	} else {
+
+		// was: for now we ignore duplicate keys - config flag ?
+
+		// if !relaxed {
+		// 	return errDictionaryDuplicateKey
+		// }
+
+		d[key] = val
+		ShowDigestedSpecViolation(fmt.Sprintf("duplicate key \"%s\"", key))
+	}
+
+	if log.ParseEnabled() {
+		log.Parse.Printf("ParseDict: dict[%s]=%v\n", key, val)
+	}
+
+	return nil
+}
+
+func processDictKeys(c context.Context, line *string, relaxed bool) (types.Dict, error) {
 	l := *line
 	var eol bool
 	d := types.NewDict()
+
 	for !strings.HasPrefix(l, ">>") {
-		key, err := parseName(&l)
+
+		if err := c.Err(); err != nil {
+			return nil, err
+		}
+
+		keyName, err := parseName(&l)
 		if err != nil {
 			return nil, err
 		}
+
 		if log.ParseEnabled() {
-			log.Parse.Printf("ParseDict: key = %s\n", key)
+			log.Parse.Printf("ParseDict: key = %s\n", keyName)
 		}
 
-		// position to first non whitespace after key
+		// Position to first non whitespace after key.
 		l, eol = trimLeftSpace(l, relaxed)
 
 		if len(l) == 0 {
 			if log.ParseEnabled() {
 				log.Parse.Println("ParseDict: only whitespace after key")
 			}
-			// only whitespace after key
+			// Only whitespace after key.
 			return nil, errDictionaryNotTerminated
 		}
 
-		// Fix for #252:
-		// For dicts with kv pairs terminated by eol we accept a missing value as an empty string.
-		if eol {
-			obj := types.StringLiteral("")
-			if log.ParseEnabled() {
-				log.Parse.Printf("ParseDict: dict[%s]=%v\n", key, obj)
-			}
-			if ok := d.Insert(string(*key), obj); !ok {
-				return nil, errDictionaryDuplicateKey
-			}
-			continue
-		}
+		var val types.Object
 
-		obj, err := ParseObject(&l)
-		if err != nil {
-			return nil, err
+		if eol {
+			// #252: For dicts with kv pairs terminated by eol we accept a missing value as an empty string.
+			val = types.StringLiteral("")
+		} else {
+			if val, err = ParseObject(&l); err != nil {
+				return nil, err
+			}
 		}
 
 		// Specifying the null object as the value of a dictionary entry (7.3.7, "Dictionary Objects")
-		// hall be equivalent to omitting the entry entirely.
-		if obj != nil {
-			d.Insert(string(*key), obj)
-			if log.ParseEnabled() {
-				log.Parse.Printf("ParseDict: dict[%s]=%v\n", key, obj)
+		// shall be equivalent to omitting the entry entirely.
+		if val != nil {
+			if err := insertKey(d, string(*keyName), val, relaxed); err != nil {
+				return nil, err
 			}
-			// if ok := d.Insert(string(*key), obj); !ok {
-			// 	return nil, errDictionaryDuplicateKey
-			// }
 		}
 
 		// We are positioned on the char behind the last parsed dict value.
@@ -597,7 +596,7 @@ func processDictKeys(line *string, relaxed bool) (types.Dict, error) {
 	return d, nil
 }
 
-func parseDict(line *string, relaxed bool) (types.Dict, error) {
+func parseDict(c context.Context, line *string, relaxed bool) (types.Dict, error) {
 	if line == nil || len(*line) == 0 {
 		return nil, errNoDictionary
 	}
@@ -623,7 +622,7 @@ func parseDict(line *string, relaxed bool) (types.Dict, error) {
 		return nil, errDictionaryNotTerminated
 	}
 
-	d, err := processDictKeys(&l, relaxed)
+	d, err := processDictKeys(c, &l, relaxed)
 	if err != nil {
 		return nil, err
 	}
@@ -739,7 +738,11 @@ func parseIndRef(s, l, l1 string, line *string, i, i2 int, rangeErr bool) (types
 func parseFloat(s string) (types.Object, error) {
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
-		return nil, err
+		s = strings.Replace(s, ".-", ".", 1)
+		f, err = strconv.ParseFloat(s, 64)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if log.ParseEnabled() {
@@ -829,7 +832,7 @@ func parseNumericOrIndRef(line *string) (types.Object, error) {
 	return parseIndRef(s, l, l1, line, i, i2, rangeErr)
 }
 
-func parseHexLiteralOrDict(l *string) (val types.Object, err error) {
+func parseHexLiteralOrDict(c context.Context, l *string) (val types.Object, err error) {
 	if len(*l) < 2 {
 		return nil, errBufNotAvailable
 	}
@@ -843,8 +846,8 @@ func parseHexLiteralOrDict(l *string) (val types.Object, err error) {
 			d   types.Dict
 			err error
 		)
-		if d, err = parseDict(l, false); err != nil {
-			if d, err = parseDict(l, true); err != nil {
+		if d, err = parseDict(c, l, false); err != nil {
+			if d, err = parseDict(c, l, true); err != nil {
 				return nil, err
 			}
 		}
@@ -892,6 +895,12 @@ func parseBooleanOrNull(l string) (val types.Object, s string, ok bool) {
 
 // ParseObject parses next Object from string buffer and returns the updated (left clipped) buffer.
 func ParseObject(line *string) (types.Object, error) {
+	return ParseObjectContext(context.Background(), line)
+}
+
+// ParseObjectContext parses next Object from string buffer and returns the updated (left clipped) buffer.
+// If the passed context is cancelled, parsing will be interrupted.
+func ParseObjectContext(c context.Context, line *string) (types.Object, error) {
 	if noBuf(line) {
 		return nil, errBufNotAvailable
 	}
@@ -915,7 +924,7 @@ func ParseObject(line *string) (types.Object, error) {
 	switch l[0] {
 
 	case '[': // array
-		a, err := parseArray(&l)
+		a, err := parseArray(c, &l)
 		if err != nil {
 			return nil, err
 		}
@@ -929,7 +938,7 @@ func ParseObject(line *string) (types.Object, error) {
 		value = *nameObj
 
 	case '<': // hex literal or dict
-		value, err = parseHexLiteralOrDict(&l)
+		value, err = parseHexLiteralOrDict(c, &l)
 		if err != nil {
 			return nil, err
 		}
@@ -1031,7 +1040,7 @@ func ParseXRefStreamDict(sd *types.StreamDict) (*types.XRefStreamDict, error) {
 			log.Parse.Println("ParseXRefStreamDict: using index dict")
 		}
 
-		if len(indArr)%2 > 1 {
+		if len(indArr)%2 != 0 {
 			return nil, errXrefStreamCorruptIndex
 		}
 
@@ -1091,4 +1100,237 @@ func ObjectStreamDict(sd *types.StreamDict) (*types.ObjectStreamDict, error) {
 		ObjArray:       nil}
 
 	return &osd, nil
+}
+
+func isMarkerTerminated(r rune) bool {
+	return r == 0x00 || unicode.IsSpace(r)
+}
+
+func detectMarker(line, marker string) int {
+	i := strings.Index(line, marker)
+	if i < 0 {
+		return i
+	}
+	if i+len(marker) >= len(line) {
+		return -1
+	}
+	off := i + len(marker)
+	ind := i
+	for !isMarkerTerminated(rune(line[off])) {
+		line = line[off:]
+		if marker == "endobj" {
+			j := strings.Index(line, "xref")
+			if j >= 0 {
+				r := rune(line[j+4])
+				if isMarkerTerminated(r) {
+					return ind
+				}
+			}
+		}
+		i = strings.Index(line, marker)
+		if i < 0 {
+			return -1
+		}
+		if i+len(marker) >= len(line) {
+			return -1
+		}
+		off = i + len(marker)
+		ind += off
+	}
+
+	return ind
+}
+
+func detectMarkers(line string, endInd, streamInd *int) {
+	//fmt.Printf("buflen=%d\n%s", len(line), hex.Dump([]byte(line)))
+	if *endInd == 0 {
+		*endInd = detectMarker(line, "endobj")
+
+	}
+	if *streamInd == 0 {
+		*streamInd = detectMarker(line, "stream")
+	}
+}
+
+func positionAfterStringLiteral(line string) (string, int, error) {
+	i := balancedParenthesesPrefix(line)
+	if i < 0 {
+		return "", 0, errStringLiteralCorrupt
+	}
+
+	line = forwardParseBuf(line[i:], 1)
+
+	return line, i + 1, nil
+}
+
+func posFloor(pos1, pos2 int) int {
+	if pos1 < 0 {
+		return pos2
+	}
+	if pos1 < pos2 {
+		return pos1
+	}
+	if pos2 < 0 {
+		return pos1
+	}
+	return pos2
+}
+
+func detectNonEscaped(line, s string) int {
+	var ind int
+	for {
+		i := strings.Index(line, s)
+		if i < 0 {
+			// did not find s
+			return -1
+		}
+		if i == 0 {
+			// found s at pos 0
+			return ind
+		}
+		if line[i-1] != 0x5c {
+			// found s at pos i
+			return ind + i
+		}
+		// found escaped s
+		if i == len(line)-1 {
+			// last is escaped s -> did not find s
+			return -1
+		}
+		// moving on after escaped s
+		line = line[i+1:]
+		ind += i + 1
+	}
+}
+
+func applyOffBoth(endInd, streamInd, off int) (int, int, error) {
+	if endInd >= 0 {
+		endInd += off
+	}
+	if streamInd >= 0 {
+		streamInd += off
+	}
+	return endInd, streamInd, nil
+}
+
+func applyOffEndIndFirst(endInd, streamInd, off, floor int) (int, int, error) {
+	endInd += off
+	if streamInd > 0 {
+		if streamInd > floor {
+			// stream after any ( or % to skip
+			streamInd = -1
+		} else {
+			streamInd += off
+		}
+	}
+	return endInd, streamInd, nil
+}
+
+func applyOffStreamIndFirst(endInd, streamInd, off, floor int) (int, int, error) {
+	streamInd += off
+	if endInd > 0 {
+		if endInd > floor {
+			// endobj after any ( or % to skip
+			endInd = -1
+		} else {
+			endInd += off
+		}
+	}
+	return endInd, streamInd, nil
+}
+
+func isComment(commentPos, strLitPos int) bool {
+	return commentPos > 0 && (strLitPos < 0 || commentPos < strLitPos)
+}
+
+func DetectKeywords(line string) (endInd int, streamInd int, err error) {
+	return DetectKeywordsWithContext(context.Background(), line)
+}
+
+func DetectKeywordsWithContext(c context.Context, line string) (endInd int, streamInd int, err error) {
+	// return endInd or streamInd which ever first encountered.
+	off, i := 0, 0
+	strLitPos, commentPos := 0, 0
+	for {
+		if err := c.Err(); err != nil {
+			return -1, -1, err
+		}
+
+		detectMarkers(line, &endInd, &streamInd)
+
+		if off == 0 && endInd < 0 && streamInd < 0 {
+			return -1, -1, nil
+		}
+
+		// Don't re-search in partial line if known to be not present.
+		if strLitPos != -1 {
+			strLitPos = detectNonEscaped(line, "(")
+		}
+		if commentPos != -1 {
+			commentPos = detectNonEscaped(line, "%")
+		}
+
+		if strLitPos < 0 && commentPos < 0 {
+			// neither ( nor % to skip
+			return applyOffBoth(endInd, streamInd, off)
+		}
+
+		floor := posFloor(strLitPos, commentPos)
+
+		if endInd > 0 {
+			if endInd < floor {
+				// endobj before any ( or % to skip
+				return applyOffEndIndFirst(endInd, streamInd, off, floor)
+			}
+		}
+
+		if streamInd > 0 {
+			if streamInd < floor {
+				// stream before any ( or % to skip
+				return applyOffStreamIndFirst(endInd, streamInd, off, floor)
+			}
+		}
+
+		// skip comment if % before any (
+		if isComment(commentPos, strLitPos) {
+			line, i = positionToNextEOL(line[commentPos:])
+			if line == "" {
+				return -1, -1, nil
+			}
+			delta := commentPos + i
+			off += delta
+
+			// Adjust found positions for changed line.
+			if endInd > delta {
+				endInd -= delta
+			} else if endInd != -1 {
+				endInd = 0
+			}
+			if streamInd > delta {
+				streamInd -= delta
+			} else if streamInd != -1 {
+				streamInd = 0
+			}
+			continue
+		}
+
+		// Skip string literal.
+		line, i, err = positionAfterStringLiteral(line[strLitPos:])
+		if err != nil {
+			return -1, -1, err
+		}
+		delta := strLitPos + i
+		off += delta
+		// Adjust found positions for changed line.
+		if endInd > delta {
+			endInd -= delta
+		} else if endInd != -1 {
+			endInd = 0
+		}
+		if streamInd > delta {
+			streamInd -= delta
+		} else if streamInd != -1 {
+			streamInd = 0
+		}
+	}
 }

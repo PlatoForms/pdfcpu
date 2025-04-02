@@ -19,7 +19,6 @@ package api
 import (
 	"io"
 	"os"
-	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pkg/errors"
@@ -36,7 +35,7 @@ func Permissions(rs io.ReadSeeker, conf *model.Configuration) (int, error) {
 	}
 	conf.Cmd = model.LISTPERMISSIONS
 
-	ctx, _, _, _, err := ReadValidateAndOptimize(rs, conf, time.Now())
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
 		return 0, err
 	}
@@ -62,22 +61,12 @@ func SetPermissions(rs io.ReadSeeker, w io.Writer, conf *model.Configuration) er
 	}
 	conf.Cmd = model.SETPERMISSIONS
 
-	fromStart := time.Now()
-	ctx, durRead, durVal, durOpt, err := ReadValidateAndOptimize(rs, conf, fromStart)
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
 		return err
 	}
 
-	fromWrite := time.Now()
-	if err = WriteContext(ctx, w); err != nil {
-		return err
-	}
-
-	durWrite := time.Since(fromWrite).Seconds()
-	durTotal := time.Since(fromStart).Seconds()
-	logOperationStats(ctx, "write", durRead, durVal, durOpt, durWrite, durTotal)
-
-	return nil
+	return WriteContext(ctx, w)
 }
 
 // SetPermissionsFile sets inFile's user access permissions.
@@ -109,9 +98,7 @@ func SetPermissionsFile(inFile, outFile string, conf *model.Configuration) (err 
 		if err != nil {
 			f2.Close()
 			f1.Close()
-			if outFile == "" || inFile == outFile {
-				os.Remove(tmpFile)
-			}
+			os.Remove(tmpFile)
 			return
 		}
 		if err = f2.Close(); err != nil {
@@ -139,15 +126,17 @@ func GetPermissions(rs io.ReadSeeker, conf *model.Configuration) (*int16, error)
 	}
 	// No cmd available.
 
-	ctx, _, _, err := readAndValidate(rs, conf, time.Now())
+	ctx, err := ReadAndValidate(rs, conf)
 	if err != nil {
 		return nil, err
 	}
+
 	if ctx.E == nil {
 		// Full access - permissions don't apply.
 		return nil, nil
 	}
 	p := int16(ctx.E.P)
+
 	return &p, nil
 }
 

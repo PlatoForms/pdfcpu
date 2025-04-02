@@ -25,40 +25,47 @@ import (
 
 // Command represents an execution context.
 type Command struct {
-	Mode           model.CommandMode
-	InFile         *string
-	InFileJSON     *string
-	InFiles        []string
-	InDir          *string
-	OutFile        *string
-	OutFileJSON    *string
-	OutDir         *string
-	PageSelection  []string
-	PWOld          *string
-	PWNew          *string
-	IntVal         int
-	BoolVal        bool
-	IntVals        []int
-	StringVals     []string
-	StringMap      map[string]string
-	Input          io.ReadSeeker
-	Inputs         []io.ReadSeeker
-	Output         io.Writer
-	Box            *model.Box
-	Import         *pdfcpu.Import
-	NUp            *model.NUp
-	Cut            *model.Cut
-	PageBoundaries *model.PageBoundaries
-	Resize         *model.Resize
-	Watermark      *model.Watermark
-	Conf           *model.Configuration
+	Mode              model.CommandMode
+	InFile            *string
+	InFileJSON        *string
+	InFiles           []string
+	InDir             *string
+	OutFile           *string
+	OutFileJSON       *string
+	OutDir            *string
+	PageSelection     []string
+	PWOld             *string
+	PWNew             *string
+	StringVal         string
+	IntVal            int
+	BoolVal1          bool
+	BoolVal2          bool
+	IntVals           []int
+	StringVals        []string
+	StringMap         map[string]string
+	Input             io.ReadSeeker
+	Inputs            []io.ReadSeeker
+	Output            io.Writer
+	Box               *model.Box
+	Import            *pdfcpu.Import
+	NUp               *model.NUp
+	Cut               *model.Cut
+	PageBoundaries    *model.PageBoundaries
+	Resize            *model.Resize
+	Zoom              *model.Zoom
+	Watermark         *model.Watermark
+	ViewerPreferences *model.ViewerPreferences
+	PageConf          *pdfcpu.PageConfiguration
+	Conf              *model.Configuration
 }
 
 var cmdMap = map[model.CommandMode]func(cmd *Command) ([]string, error){
 	model.VALIDATE:                Validate,
 	model.OPTIMIZE:                Optimize,
 	model.SPLIT:                   Split,
+	model.SPLITBYPAGENR:           SplitByPageNr,
 	model.MERGECREATE:             MergeCreate,
+	model.MERGECREATEZIP:          MergeCreateZip,
 	model.MERGEAPPEND:             MergeAppend,
 	model.EXTRACTIMAGES:           ExtractImages,
 	model.EXTRACTFONTS:            ExtractFonts,
@@ -104,6 +111,7 @@ var cmdMap = map[model.CommandMode]func(cmd *Command) ([]string, error){
 	model.LISTANNOTATIONS:         processPageAnnotations,
 	model.REMOVEANNOTATIONS:       processPageAnnotations,
 	model.LISTIMAGES:              processImages,
+	model.UPDATEIMAGES:            processImages,
 	model.DUMP:                    Dump,
 	model.CREATE:                  Create,
 	model.LISTFORMFIELDS:          processForm,
@@ -122,6 +130,16 @@ var cmdMap = map[model.CommandMode]func(cmd *Command) ([]string, error){
 	model.EXPORTBOOKMARKS:         processBookmarks,
 	model.IMPORTBOOKMARKS:         processBookmarks,
 	model.REMOVEBOOKMARKS:         processBookmarks,
+	model.LISTPAGEMODE:            processPageMode,
+	model.SETPAGEMODE:             processPageMode,
+	model.RESETPAGEMODE:           processPageMode,
+	model.LISTPAGELAYOUT:          processPageLayout,
+	model.SETPAGELAYOUT:           processPageLayout,
+	model.RESETPAGELAYOUT:         processPageLayout,
+	model.LISTVIEWERPREFERENCES:   processViewerPreferences,
+	model.SETVIEWERPREFERENCES:    processViewerPreferences,
+	model.RESETVIEWERPREFERENCES:  processViewerPreferences,
+	model.ZOOM:                    Zoom,
 }
 
 // ValidateCommand creates a new command to validate a file.
@@ -149,7 +167,7 @@ func OptimizeCommand(inFile, outFile string, conf *model.Configuration) *Command
 		Conf:    conf}
 }
 
-// SplitCommand creates a new command to split a file into single page files.
+// SplitCommand creates a new command to split a file according to span or along bookmarks..
 func SplitCommand(inFile, dirNameOut string, span int, conf *model.Configuration) *Command {
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
@@ -163,15 +181,44 @@ func SplitCommand(inFile, dirNameOut string, span int, conf *model.Configuration
 		Conf:   conf}
 }
 
+// SplitByPageNrCommand creates a new command to split a file into files along given pages.
+func SplitByPageNrCommand(inFile, dirNameOut string, pageNrs []int, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.SPLITBYPAGENR
+	return &Command{
+		Mode:    model.SPLITBYPAGENR,
+		InFile:  &inFile,
+		OutDir:  &dirNameOut,
+		IntVals: pageNrs,
+		Conf:    conf}
+}
+
 // MergeCreateCommand creates a new command to merge files.
 // Outfile will be created. An existing outFile will be overwritten.
-func MergeCreateCommand(inFiles []string, outFile string, conf *model.Configuration) *Command {
+func MergeCreateCommand(inFiles []string, outFile string, dividerPage bool, conf *model.Configuration) *Command {
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	}
 	conf.Cmd = model.MERGECREATE
 	return &Command{
-		Mode:    model.MERGECREATE,
+		Mode:     model.MERGECREATE,
+		InFiles:  inFiles,
+		OutFile:  &outFile,
+		BoolVal1: dividerPage,
+		Conf:     conf}
+}
+
+// MergeCreateZipCommand creates a new command to zip merge 2 files.
+// Outfile will be created. An existing outFile will be overwritten.
+func MergeCreateZipCommand(inFiles []string, outFile string, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.MERGECREATEZIP
+	return &Command{
+		Mode:    model.MERGECREATEZIP,
 		InFiles: inFiles,
 		OutFile: &outFile,
 		Conf:    conf}
@@ -179,16 +226,17 @@ func MergeCreateCommand(inFiles []string, outFile string, conf *model.Configurat
 
 // MergeAppendCommand creates a new command to merge files.
 // Any existing outFile PDF content will be preserved and serves as the beginning of the merge result.
-func MergeAppendCommand(inFiles []string, outFile string, conf *model.Configuration) *Command {
+func MergeAppendCommand(inFiles []string, outFile string, dividerPage bool, conf *model.Configuration) *Command {
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	}
 	conf.Cmd = model.MERGEAPPEND
 	return &Command{
-		Mode:    model.MERGEAPPEND,
-		InFiles: inFiles,
-		OutFile: &outFile,
-		Conf:    conf}
+		Mode:     model.MERGEAPPEND,
+		InFiles:  inFiles,
+		OutFile:  &outFile,
+		BoolVal1: dividerPage,
+		Conf:     conf}
 }
 
 // ExtractImagesCommand creates a new command to extract embedded images.
@@ -401,15 +449,15 @@ func ChangeOwnerPWCommand(inFile, outFile string, pwOld, pwNew *string, conf *mo
 }
 
 // ListPermissionsCommand create a new command to list permissions.
-func ListPermissionsCommand(inFile string, conf *model.Configuration) *Command {
+func ListPermissionsCommand(inFiles []string, conf *model.Configuration) *Command {
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	}
 	conf.Cmd = model.LISTPERMISSIONS
 	return &Command{
-		Mode:   model.LISTPERMISSIONS,
-		InFile: &inFile,
-		Conf:   conf}
+		Mode:    model.LISTPERMISSIONS,
+		InFiles: inFiles,
+		Conf:    conf}
 }
 
 // SetPermissionsCommand creates a new command to add permissions.
@@ -469,7 +517,7 @@ func ImportImagesCommand(imageFiles []string, outFile string, imp *pdfcpu.Import
 }
 
 // InsertPagesCommand creates a new command to insert a blank page before or after selected pages.
-func InsertPagesCommand(inFile, outFile string, pageSelection []string, conf *model.Configuration, mode string) *Command {
+func InsertPagesCommand(inFile, outFile string, pageSelection []string, conf *model.Configuration, mode string, pageConf *pdfcpu.PageConfiguration) *Command {
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	}
@@ -483,6 +531,7 @@ func InsertPagesCommand(inFile, outFile string, pageSelection []string, conf *mo
 		InFile:        &inFile,
 		OutFile:       &outFile,
 		PageSelection: pageSelection,
+		PageConf:      pageConf,
 		Conf:          conf}
 }
 
@@ -546,7 +595,7 @@ func BookletCommand(inFiles []string, outFile string, pageSelection []string, nu
 }
 
 // InfoCommand creates a new command to output information about inFile.
-func InfoCommand(inFiles []string, pageSelection []string, json bool, conf *model.Configuration) *Command {
+func InfoCommand(inFiles []string, pageSelection []string, fonts, json bool, conf *model.Configuration) *Command {
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	}
@@ -555,7 +604,8 @@ func InfoCommand(inFiles []string, pageSelection []string, json bool, conf *mode
 		Mode:          model.LISTINFO,
 		InFiles:       inFiles,
 		PageSelection: pageSelection,
-		BoolVal:       json,
+		BoolVal1:      fonts,
+		BoolVal2:      json,
 		Conf:          conf}
 }
 
@@ -789,6 +839,22 @@ func ListImagesCommand(inFiles []string, pageSelection []string, conf *model.Con
 		Conf:          conf}
 }
 
+// UpdateImagesCommand creates a new command to update images.
+func UpdateImagesCommand(inFile, imageFile, outFile string, objNrOrPageNr int, id string, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.UPDATEIMAGES
+
+	return &Command{
+		Mode:      model.UPDATEIMAGES,
+		InFiles:   []string{inFile, imageFile},
+		OutFile:   &outFile,
+		IntVal:    objNrOrPageNr,
+		StringVal: id,
+		Conf:      conf}
+}
+
 // DumpCommand creates a new command to dump objects on stdout.
 func DumpCommand(inFilePDF string, vals []int, conf *model.Configuration) *Command {
 	if conf == nil {
@@ -923,7 +989,7 @@ func MultiFillFormCommand(inFilePDF, inFileData, outDir, outFilePDF string, merg
 		InFileJSON: &inFileData, // TODO Fix name clash.
 		OutDir:     &outDir,
 		OutFile:    &outFilePDF,
-		BoolVal:    merge,
+		BoolVal1:   merge,
 		Conf:       conf}
 }
 
@@ -1024,7 +1090,7 @@ func ImportBookmarksCommand(inFile, inFileJSON, outFile string, replace bool, co
 	conf.Cmd = model.IMPORTBOOKMARKS
 	return &Command{
 		Mode:       model.IMPORTBOOKMARKS,
-		BoolVal:    replace,
+		BoolVal1:   replace,
 		InFile:     &inFile,
 		InFileJSON: &inFileJSON,
 		OutFile:    &outFile,
@@ -1042,4 +1108,141 @@ func RemoveBookmarksCommand(inFile, outFile string, conf *model.Configuration) *
 		InFile:  &inFile,
 		OutFile: &outFile,
 		Conf:    conf}
+}
+
+// ListPageLayoutCommand creates a new command to list the document page layout.
+func ListPageLayoutCommand(inFile string, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.LISTPAGELAYOUT
+	return &Command{
+		Mode:   model.LISTPAGELAYOUT,
+		InFile: &inFile,
+		Conf:   conf}
+}
+
+// SetPageLayoutCommand creates a new command to set the document page layout.
+func SetPageLayoutCommand(inFile, outFile, value string, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.SETPAGELAYOUT
+	return &Command{
+		Mode:      model.SETPAGELAYOUT,
+		InFile:    &inFile,
+		OutFile:   &outFile,
+		StringVal: value,
+		Conf:      conf}
+}
+
+// ResetPageLayoutCommand creates a new command to reset the document page layout.
+func ResetPageLayoutCommand(inFile, outFile string, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.RESETPAGELAYOUT
+	return &Command{
+		Mode:    model.RESETPAGELAYOUT,
+		InFile:  &inFile,
+		OutFile: &outFile,
+		Conf:    conf}
+}
+
+// ListPageModeCommand creates a new command to list the document page mode.
+func ListPageModeCommand(inFile string, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.LISTPAGEMODE
+	return &Command{
+		Mode:   model.LISTPAGEMODE,
+		InFile: &inFile,
+		Conf:   conf}
+}
+
+// SetPageModeCommand creates a new command to set the document page mode.
+func SetPageModeCommand(inFile, outFile, value string, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.SETPAGEMODE
+	return &Command{
+		Mode:      model.SETPAGEMODE,
+		InFile:    &inFile,
+		OutFile:   &outFile,
+		StringVal: value,
+		Conf:      conf}
+}
+
+// ResetPageModeCommand creates a new command to reset the document page mode.
+func ResetPageModeCommand(inFile, outFile string, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.RESETPAGEMODE
+	return &Command{
+		Mode:    model.RESETPAGEMODE,
+		InFile:  &inFile,
+		OutFile: &outFile,
+		Conf:    conf}
+}
+
+// ListViewerPreferencesCommand creates a new command to list the viewer preferences.
+func ListViewerPreferencesCommand(inFile string, all, json bool, conf *model.Configuration) *Command {
+
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.LISTVIEWERPREFERENCES
+	return &Command{
+		Mode:     model.LISTVIEWERPREFERENCES,
+		InFile:   &inFile,
+		BoolVal1: all,
+		BoolVal2: json,
+		Conf:     conf}
+}
+
+// SetViewerPreferencesCommand creates a new command to set the viewer preferences.
+func SetViewerPreferencesCommand(inFilePDF, inFileJSON, outFilePDF, stringJSON string, conf *model.Configuration) *Command {
+
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.SETVIEWERPREFERENCES
+	return &Command{
+		Mode:       model.SETVIEWERPREFERENCES,
+		InFile:     &inFilePDF,
+		InFileJSON: &inFileJSON,
+		OutFile:    &outFilePDF,
+		StringVal:  stringJSON,
+		Conf:       conf}
+}
+
+// ResetViewerPreferencesCommand creates a new command to reset the viewer preferences.
+func ResetViewerPreferencesCommand(inFile, outFile string, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.RESETVIEWERPREFERENCES
+	return &Command{
+		Mode:    model.RESETVIEWERPREFERENCES,
+		InFile:  &inFile,
+		OutFile: &outFile,
+		Conf:    conf}
+}
+
+// ZoomCommand creates a new command to zoom in/out of selected pages.
+func ZoomCommand(inFile, outFile string, pageSelection []string, zoom *model.Zoom, conf *model.Configuration) *Command {
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.ZOOM
+	return &Command{
+		Mode:          model.ZOOM,
+		InFile:        &inFile,
+		OutFile:       &outFile,
+		PageSelection: pageSelection,
+		Zoom:          zoom,
+		Conf:          conf}
 }

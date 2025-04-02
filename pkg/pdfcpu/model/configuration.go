@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/font"
+	"github.com/pdfcpu/pdfcpu/pkg/log"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 )
 
@@ -33,25 +34,36 @@ const (
 
 	// ValidationRelaxed ensures PDF compliance based on frequently encountered validation errors.
 	ValidationRelaxed
+)
 
-	// ValidationNone bypasses validation.
-	ValidationNone
+// See table 22 - User access permissions
+type PermissionFlags int
+
+const (
+	UnusedFlag1              PermissionFlags = 1 << iota // Bit 1:  unused
+	UnusedFlag2                                          // Bit 2:  unused
+	PermissionPrintRev2                                  // Bit 3:  Print (security handlers rev.2), draft print (security handlers >= rev.3)
+	PermissionModify                                     // Bit 4:  Modify contents by operations other than controlled by bits 6, 9, 11.
+	PermissionExtract                                    // Bit 5:  Copy, extract text & graphics
+	PermissionModAnnFillForm                             // Bit 6:  Add or modify annotations, fill form fields, in conjunction with bit 4 create/mod form fields.
+	UnusedFlag7                                          // Bit 7:  unused
+	UnusedFlag8                                          // Bit 8:  unused
+	PermissionFillRev3                                   // Bit 9:  Fill form fields (security handlers >= rev.3)
+	PermissionExtractRev3                                // Bit 10: Copy, extract text & graphics (security handlers >= rev.3) (unused since PDF 2.0)
+	PermissionAssembleRev3                               // Bit 11: Assemble document (security handlers >= rev.3)
+	PermissionPrintRev3                                  // Bit 12: Print (security handlers >= rev.3)
+)
+
+const (
+	PermissionsNone  = PermissionFlags(0xF0C3)
+	PermissionsPrint = PermissionsNone + PermissionPrintRev2 + PermissionPrintRev3
+	PermissionsAll   = PermissionFlags(0xFFFF)
 )
 
 const (
 
 	// StatsFileNameDefault is the standard stats filename.
 	StatsFileNameDefault = "stats.csv"
-
-	// PermissionsAll enables all user access permission bits.
-	PermissionsAll int16 = -1 // 0xFFFF
-
-	// PermissionsPrint disables all user access permissions bits except for printing.
-	PermissionsPrint int16 = -1849 // 0xF8C7
-
-	// PermissionsNone disables all user access permissions bits.
-	PermissionsNone int16 = -3901 // 0xF0C3
-
 )
 
 // CommandMode specifies the operation being executed.
@@ -63,7 +75,9 @@ const (
 	LISTINFO
 	OPTIMIZE
 	SPLIT
+	SPLITBYPAGENR
 	MERGECREATE
+	MERGECREATEZIP
 	MERGEAPPEND
 	EXTRACTIMAGES
 	EXTRACTFONTS
@@ -107,6 +121,7 @@ const (
 	IMPORTBOOKMARKS
 	EXPORTBOOKMARKS
 	LISTIMAGES
+	UPDATEIMAGES
 	CREATE
 	DUMP
 	LISTFORMFIELDS
@@ -128,12 +143,26 @@ const (
 	POSTER
 	NDOWN
 	CUT
+	LISTPAGELAYOUT
+	SETPAGELAYOUT
+	RESETPAGELAYOUT
+	LISTPAGEMODE
+	SETPAGEMODE
+	RESETPAGEMODE
+	LISTVIEWERPREFERENCES
+	SETVIEWERPREFERENCES
+	RESETVIEWERPREFERENCES
+	ZOOM
 )
 
 // Configuration of a Context.
 type Configuration struct {
 	// Location of corresponding config.yml
 	Path string
+
+	CreationDate string
+
+	Version string
 
 	// Check filename extensions.
 	CheckFileNameExt bool
@@ -146,6 +175,9 @@ type Configuration struct {
 
 	// Validate against ISO-32000: strict or relaxed.
 	ValidationMode int
+
+	// Enable validation right before writing.
+	PostProcessValidate bool
 
 	// Check for broken links in LinkedAnnotations/URIActions.
 	ValidateLinks bool
@@ -186,7 +218,7 @@ type Configuration struct {
 	EncryptKeyLength int
 
 	// Supplied user access permissions, see Table 22.
-	Permissions int16
+	Permissions PermissionFlags // int16
 
 	// Command being executed.
 	Cmd CommandMode
@@ -200,14 +232,30 @@ type Configuration struct {
 	// Date format.
 	DateFormat string
 
-	// Buffersize for locating PDF header <= 100
-	HeaderBufSize int
+	// Optimize after reading and validating the xreftable but before processing.
+	Optimize bool
 
-	// Optimize duplicate content streams across pages.
+	// Optimize after processing but before writing.
+	// TODO add to config.yml
+	OptimizeBeforeWriting bool
+
+	// Optimize page resources via content stream analysis. (assuming Optimize == true || OptimizeBeforeWriting == true)
+	OptimizeResourceDicts bool
+
+	// Optimize duplicate content streams across pages. (assuming Optimize == true || OptimizeBeforeWriting == true)
 	OptimizeDuplicateContentStreams bool
 
-	// Merge creates bookmarks
+	// Merge creates bookmarks.
 	CreateBookmarks bool
+
+	// PDF Viewer is expected to supply appearance streams for form fields.
+	NeedAppearances bool
+
+	// Internet availability.
+	Offline bool
+
+	// HTTP timeout in seconds.
+	Timeout int
 }
 
 // ConfigPath defines the location of pdfcpu's configuration directory.
@@ -223,14 +271,32 @@ var ConfigPath string = "disable"
 
 var loadedDefaultConfig *Configuration
 
-//go:embed config.yml
+//go:embed resources/config.yml
 var configFileBytes []byte
 
-func ensureConfigFileAt(path string) error {
+//go:embed resources/Roboto-Regular.ttf
+var robotoFontFileBytes []byte
+
+func ensureConfigFileAt(path string, override bool) error {
 	f, err := os.Open(path)
-	if err != nil {
+	if err != nil || override {
 		f.Close()
-		s := fmt.Sprintf("#############################\n# pdfcpu %s         #\n# Created: %s #\n", VersionStr, time.Now().Format("2006-01-02 15:04"))
+
+		s := fmt.Sprintf(`
+#############################
+#   Default configuration   #
+#############################
+
+# Creation date
+created: %s 
+
+# version (Do not edit!)
+version: %s 
+
+`,
+			time.Now().Format("2006-01-02 15:04"),
+			VersionStr)
+
 		bb := append([]byte(s), configFileBytes...)
 		if err := os.WriteFile(path, bb, os.ModePerm); err != nil {
 			return err
@@ -247,16 +313,35 @@ func ensureConfigFileAt(path string) error {
 
 // EnsureDefaultConfigAt tries to load the default configuration from path.
 // If path/pdfcpu/config.yaml is not found, it will be created.
-func EnsureDefaultConfigAt(path string) error {
+func EnsureDefaultConfigAt(path string, override bool) error {
 	configDir := filepath.Join(path, "pdfcpu")
 	font.UserFontDir = filepath.Join(configDir, "fonts")
 	if err := os.MkdirAll(font.UserFontDir, os.ModePerm); err != nil {
 		return err
 	}
-	if err := ensureConfigFileAt(filepath.Join(configDir, "config.yml")); err != nil {
+	if err := ensureConfigFileAt(filepath.Join(configDir, "config.yml"), override); err != nil {
 		return err
 	}
 	//fmt.Println(loadedDefaultConfig)
+
+	files, err := os.ReadDir(font.UserFontDir)
+	if err != nil {
+		return err
+	}
+
+	if len(files) == 0 {
+		// Ensure Roboto font for form filling.
+		fn := "Roboto-Regular"
+		if log.CLIEnabled() {
+			log.CLI.Printf("installing user font:")
+		}
+		if err := font.InstallFontFromBytes(font.UserFontDir, fn, robotoFontFileBytes); err != nil {
+			if log.CLIEnabled() {
+				log.CLI.Printf("%v", err)
+			}
+		}
+	}
+
 	return font.LoadUserFonts()
 }
 
@@ -267,6 +352,8 @@ func newDefaultConfiguration() *Configuration {
 	// 		cli: supply -conf disable
 	// 		api: call api.DisableConfigDir()
 	return &Configuration{
+		CreationDate:                    time.Now().Format("2006-01-02 15:04"),
+		Version:                         VersionStr,
 		CheckFileNameExt:                true,
 		Reader15:                        true,
 		DecodeAllStreams:                false,
@@ -277,13 +364,26 @@ func newDefaultConfiguration() *Configuration {
 		WriteXRefStream:                 true,
 		EncryptUsingAES:                 true,
 		EncryptKeyLength:                256,
-		Permissions:                     PermissionsNone,
+		Permissions:                     PermissionsPrint,
 		TimestampFormat:                 "2006-01-02 15:04",
 		DateFormat:                      "2006-01-02",
-		HeaderBufSize:                   100,
+		Optimize:                        true,
+		OptimizeBeforeWriting:           true,
+		OptimizeResourceDicts:           true,
 		OptimizeDuplicateContentStreams: false,
 		CreateBookmarks:                 true,
+		NeedAppearances:                 false,
+		Offline:                         false,
+		Timeout:                         5,
 	}
+}
+
+func ResetConfig() error {
+	path, err := os.UserConfigDir()
+	if err != nil {
+		path = os.TempDir()
+	}
+	return EnsureDefaultConfigAt(path, true)
 }
 
 // NewDefaultConfiguration returns the default pdfcpu configuration.
@@ -297,12 +397,11 @@ func NewDefaultConfiguration() *Configuration {
 		if err != nil {
 			path = os.TempDir()
 		}
-		println(path)
-		if err = EnsureDefaultConfigAt(path); err == nil {
+		if err = EnsureDefaultConfigAt(path, false); err == nil {
 			c := *loadedDefaultConfig
 			return &c
 		}
-		fmt.Fprintf(os.Stderr, "pdfcpu: config dir problem: %v\n", err)
+		fmt.Fprintf(os.Stderr, "pdfcpu: config problem: %v\n", err)
 		os.Exit(1)
 	}
 	// Bypass config.yml
@@ -335,28 +434,41 @@ func (c Configuration) String() string {
 		path = c.Path
 	}
 	return fmt.Sprintf("pdfcpu configuration:\n"+
-		"Path:              %s\n"+
-		"CheckFileNameExt:  %t\n"+
-		"Reader15:          %t\n"+
-		"DecodeAllStreams:  %t\n"+
-		"ValidationMode:    %s\n"+
-		"Eol:               %s\n"+
-		"WriteObjectStream: %t\n"+
-		"WriteXrefStream:   %t\n"+
-		"EncryptUsingAES:   %t\n"+
-		"EncryptKeyLength:  %d\n"+
-		"Permissions:       %d\n"+
-		"Unit :             %s\n"+
-		"TimestampFormat:	%s\n"+
-		"DateFormat:		%s\n"+
-		"HeaderBufSize:		%d\n"+
+		"Path:                %s\n"+
+		"CreationDate:		  %s\n"+
+		"Version:             %s\n"+
+		"CheckFileNameExt:    %t\n"+
+		"Reader15:            %t\n"+
+		"DecodeAllStreams:    %t\n"+
+		"ValidationMode:      %s\n"+
+		"PostProcessValidate: %t\n"+
+		"ValidateLinks:       %t\n"+
+		"Eol:                 %s\n"+
+		"WriteObjectStream:   %t\n"+
+		"WriteXrefStream:     %t\n"+
+		"EncryptUsingAES:     %t\n"+
+		"EncryptKeyLength:    %d\n"+
+		"Permissions:         %d\n"+
+		"Unit :               %s\n"+
+		"TimestampFormat:	  %s\n"+
+		"DateFormat:		  %s\n"+
+		"Optimize %t\n"+
+		"OptimizeBeforeWriting %t\n"+
+		"OptimizeResourceDicts %t\n"+
 		"OptimizeDuplicateContentStreams %t\n"+
-		"CreateBookmarks %t\n",
+		"CreateBookmarks %t\n"+
+		"NeedAppearances %t\n"+
+		"Offline %t\n"+
+		"Timeout %d\n",
 		path,
+		c.CreationDate,
+		c.Version,
 		c.CheckFileNameExt,
 		c.Reader15,
 		c.DecodeAllStreams,
 		c.ValidationModeString(),
+		c.PostProcessValidate,
+		c.ValidateLinks,
 		c.EolString(),
 		c.WriteObjectStream,
 		c.WriteXRefStream,
@@ -366,9 +478,14 @@ func (c Configuration) String() string {
 		c.UnitString(),
 		c.TimestampFormat,
 		c.DateFormat,
-		c.HeaderBufSize,
+		c.Optimize,
+		c.OptimizeBeforeWriting,
+		c.OptimizeResourceDicts,
 		c.OptimizeDuplicateContentStreams,
 		c.CreateBookmarks,
+		c.NeedAppearances,
+		c.Offline,
+		c.Timeout,
 	)
 }
 
@@ -391,10 +508,7 @@ func (c *Configuration) ValidationModeString() string {
 	if c.ValidationMode == ValidationStrict {
 		return "strict"
 	}
-	if c.ValidationMode == ValidationRelaxed {
-		return "relaxed"
-	}
-	return "none"
+	return "relaxed"
 }
 
 // UnitString returns a string rep for the display unit in effect.
@@ -411,6 +525,20 @@ func (c *Configuration) UnitString() string {
 		s = "mm"
 	}
 	return s
+}
+
+// SetUnit configures the display unit.
+func (c *Configuration) SetUnit(s string) {
+	switch s {
+	case "points":
+		c.Unit = types.POINTS
+	case "inches":
+		c.Unit = types.INCHES
+	case "cm":
+		c.Unit = types.CENTIMETRES
+	case "mm":
+		c.Unit = types.MILLIMETRES
+	}
 }
 
 // ApplyReducedFeatureSet returns true if complex entries like annotations shall not be written.

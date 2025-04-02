@@ -91,8 +91,25 @@ func pdfImage(xRefTable *model.XRefTable, sd *types.StreamDict, thumb bool, objN
 
 	bpc := *sd.IntEntry("BitsPerComponent")
 
-	w := *sd.IntEntry("Width")
-	h := *sd.IntEntry("Height")
+	obj, ok := sd.Find("Width")
+	if !ok {
+		return nil, errors.Errorf("pdfcpu: missing image width obj#%d", objNr)
+	}
+	i, err := xRefTable.DereferenceInteger(obj)
+	if err != nil {
+		return nil, err
+	}
+	w := i.Value()
+
+	obj, ok = sd.Find("Height")
+	if !ok {
+		return nil, errors.Errorf("pdfcpu: missing image height obj#%d", objNr)
+	}
+	i, err = xRefTable.DereferenceInteger(obj)
+	if err != nil {
+		return nil, err
+	}
+	h := i.Value()
 
 	decode := decodeArr(sd.ArrayEntry("Decode"))
 
@@ -127,7 +144,7 @@ func colorLookupTable(xRefTable *model.XRefTable, o types.Object) ([]byte, error
 	switch o := o.(type) {
 
 	case types.StringLiteral:
-		return types.Unescape(o.Value(), false)
+		return types.Unescape(o.Value())
 
 	case types.HexLiteral:
 		return o.Bytes()
@@ -259,7 +276,7 @@ func imageForCMYKWithoutSoftMask(im *PDFImage) image.Image {
 	for y := 0; y < im.h; y++ {
 		for x := 0; x < im.w; x++ {
 			img.Set(x, y, color.CMYK{C: b[i], M: b[i+1], Y: b[i+2], K: b[i+3]})
-			i += 4
+			i += im.comp
 		}
 	}
 
@@ -335,7 +352,7 @@ func renderDeviceGrayToPNG(im *PDFImage, resourceName string) (io.Reader, string
 	for y := 0; y < im.h; y++ {
 		for x := 0; x < im.w; {
 			p := b[i]
-			for j := 0; j < 8/im.bpc; j++ {
+			for j := 0; j < 8/im.bpc && x < im.w; j++ {
 				pix := p >> (8 - uint8(im.bpc))
 				v := decodePixelValue(pix, im.bpc, cvr)
 				if im.bpc < 8 {
@@ -498,7 +515,7 @@ func renderIndexedGrayToPNG(im *PDFImage, resourceName string, lookup []byte) (i
 	for y := 0; y < im.h; y++ {
 		for x := 0; x < im.w; {
 			p := b[i]
-			for j := 0; j < 8/im.bpc; j++ {
+			for j := 0; j < 8/im.bpc && x < im.w; j++ {
 				ind := p >> (8 - uint8(im.bpc))
 				v := decodePixelValue(lookup[ind], im.bpc, cvr)
 				if im.bpc < 8 {
@@ -531,7 +548,7 @@ func renderIndexedRGBToPNG(im *PDFImage, resourceName string, lookup []byte) (io
 	for y := 0; y < im.h; y++ {
 		for x := 0; x < im.w; {
 			p := b[i]
-			for j := 0; j < 8/im.bpc; j++ {
+			for j := 0; j < 8/im.bpc && x < im.w; j++ {
 				ind := p >> (8 - uint8(im.bpc))
 				//fmt.Printf("x=%d y=%d i=%d j=%d p=#%02x ind=#%02x\n", x, y, i, j, p, ind)
 				alpha := uint8(255)
@@ -568,7 +585,7 @@ func imageForIndexedCMYKWithoutSoftMask(im *PDFImage, lookup []byte) image.Image
 	for y := 0; y < im.h; y++ {
 		for x := 0; x < im.w; {
 			p := b[i]
-			for j := 0; j < 8/im.bpc; j++ {
+			for j := 0; j < 8/im.bpc && x < im.w; j++ {
 				ind := p >> (8 - uint8(im.bpc))
 				//fmt.Printf("x=%d y=%d i=%d j=%d p=#%02x ind=#%02x\n", x, y, i, j, p, ind)
 				l := 4 * int(ind)
@@ -594,7 +611,7 @@ func imageForIndexedCMYKWithSoftMask(im *PDFImage, lookup []byte) image.Image {
 	for y := 0; y < im.h; y++ {
 		for x := 0; x < im.w; {
 			p := b[i]
-			for j := 0; j < 8/im.bpc; j++ {
+			for j := 0; j < 8/im.bpc && x < im.w; j++ {
 				ind := p >> (8 - uint8(im.bpc))
 				//fmt.Printf("x=%d y=%d i=%d j=%d p=#%02x ind=#%02x\n", x, y, i, j, p, ind)
 				l := 4 * int(ind)
@@ -773,17 +790,37 @@ func renderIndexed(xRefTable *model.XRefTable, im *PDFImage, resourceName string
 }
 
 func renderDeviceN(xRefTable *model.XRefTable, im *PDFImage, resourceName string, cs types.Array) (io.Reader, string, error) {
+	if im.comp <= 4 {
+		switch im.comp {
+		case 1:
+			// Gray
+			return renderDeviceGrayToPNG(im, resourceName)
 
-	switch im.comp {
-	case 1:
+		case 3:
+			// RGB
+			return renderDeviceRGBToPNG(im, resourceName)
+
+		case 4:
+			// CMYK
+			return renderDeviceCMYKToTIFF(im, resourceName)
+		}
+	}
+
+	alternateCS, ok := cs[2].(types.Name)
+	if !ok {
+		return nil, "", nil
+	}
+
+	switch alternateCS {
+	case model.DeviceGrayCS:
 		// Gray
 		return renderDeviceGrayToPNG(im, resourceName)
 
-	case 3:
+	case model.DeviceRGBCS:
 		// RGB
 		return renderDeviceRGBToPNG(im, resourceName)
 
-	case 4:
+	case model.DeviceCMYKCS:
 		// CMYK
 		return renderDeviceCMYKToTIFF(im, resourceName)
 	}
@@ -791,7 +828,7 @@ func renderDeviceN(xRefTable *model.XRefTable, im *PDFImage, resourceName string
 	return nil, "", nil
 }
 
-func renderFlateEncodedImage(xRefTable *model.XRefTable, sd *types.StreamDict, thumb bool, resourceName string, objNr int) (io.Reader, string, error) {
+func renderImage(xRefTable *model.XRefTable, sd *types.StreamDict, thumb bool, resourceName string, objNr int) (io.Reader, string, error) {
 	// If color space is CMYK then write .tif else write .png
 
 	pdfImage, err := pdfImage(xRefTable, sd, thumb, objNr)
@@ -820,7 +857,7 @@ func renderFlateEncodedImage(xRefTable *model.XRefTable, sd *types.StreamDict, t
 
 		default:
 			if log.InfoEnabled() {
-				log.Info.Printf("renderFlateEncodedImage: objNr=%d, unsupported name colorspace %s\n", objNr, cs.String())
+				log.Info.Printf("renderImage: objNr=%d, unsupported name colorspace %s\n", objNr, cs.String())
 			}
 		}
 
@@ -846,7 +883,7 @@ func renderFlateEncodedImage(xRefTable *model.XRefTable, sd *types.StreamDict, t
 
 		default:
 			if log.InfoEnabled() {
-				log.Info.Printf("renderFlateEncodedImage: objNr=%d, unsupported array colorspace %s\n", objNr, csn)
+				log.Info.Printf("renderImage: objNr=%d, unsupported array colorspace %s\n", objNr, csn)
 			}
 		}
 
@@ -908,12 +945,16 @@ func renderDCTToPNG(xRefTable *model.XRefTable, sd *types.StreamDict, thumb bool
 func RenderImage(xRefTable *model.XRefTable, sd *types.StreamDict, thumb bool, resourceName string, objNr int) (io.Reader, string, error) {
 	// Image compression is the last filter in the pipeline.
 
+	if len(sd.FilterPipeline) == 0 {
+		return renderImage(xRefTable, sd, thumb, resourceName, objNr)
+	}
+
 	f := sd.FilterPipeline[len(sd.FilterPipeline)-1].Name
 
 	switch f {
 
-	case filter.Flate, filter.CCITTFax, filter.RunLength:
-		return renderFlateEncodedImage(xRefTable, sd, thumb, resourceName, objNr)
+	case filter.Flate, filter.LZW, filter.CCITTFax, filter.RunLength:
+		return renderImage(xRefTable, sd, thumb, resourceName, objNr)
 
 	case filter.DCT:
 		if sd.CSComponents == 4 {

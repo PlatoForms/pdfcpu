@@ -17,13 +17,51 @@ limitations under the License.
 package model
 
 import (
+	"context"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 	"github.com/pkg/errors"
 )
 
-func (xRefTable *XRefTable) indRefToObject(ir *types.IndirectRef) (types.Object, error) {
+func processDictRefCounts(xRefTable *XRefTable, d types.Dict) {
+	for _, e := range d {
+		switch o1 := e.(type) {
+		case types.IndirectRef:
+			xRefTable.IncrementRefCount(&o1)
+		case types.Dict:
+			ProcessRefCounts(xRefTable, o1)
+		case types.Array:
+			ProcessRefCounts(xRefTable, o1)
+		}
+	}
+}
+
+func processArrayRefCounts(xRefTable *XRefTable, a types.Array) {
+	for _, e := range a {
+		switch o1 := e.(type) {
+		case types.IndirectRef:
+			xRefTable.IncrementRefCount(&o1)
+		case types.Dict:
+			ProcessRefCounts(xRefTable, o1)
+		case types.Array:
+			ProcessRefCounts(xRefTable, o1)
+		}
+	}
+}
+
+func ProcessRefCounts(xRefTable *XRefTable, o types.Object) {
+	switch o := o.(type) {
+	case types.Dict:
+		processDictRefCounts(xRefTable, o)
+	case types.StreamDict:
+		processDictRefCounts(xRefTable, o.Dict)
+	case types.Array:
+		processArrayRefCounts(xRefTable, o)
+	}
+}
+
+func (xRefTable *XRefTable) indRefToObject(ir *types.IndirectRef, decodeLazy bool) (types.Object, error) {
 	if ir == nil {
 		return nil, errors.New("pdfcpu: indRefToObject: input argument is nil")
 	}
@@ -38,6 +76,16 @@ func (xRefTable *XRefTable) indRefToObject(ir *types.IndirectRef) (types.Object,
 
 	xRefTable.CurObj = int(ir.ObjectNumber)
 
+	if l, ok := entry.Object.(types.LazyObjectStreamObject); ok && decodeLazy {
+		ob, err := l.DecodedObject(context.TODO())
+		if err != nil {
+			return nil, err
+		}
+
+		ProcessRefCounts(xRefTable, ob)
+		entry.Object = ob
+	}
+
 	// return dereferenced object
 	return entry.Object, nil
 }
@@ -50,7 +98,17 @@ func (xRefTable *XRefTable) Dereference(o types.Object) (types.Object, error) {
 		return o, nil
 	}
 
-	return xRefTable.indRefToObject(&ir)
+	return xRefTable.indRefToObject(&ir, true)
+}
+
+func (xRefTable *XRefTable) DereferenceForWrite(o types.Object) (types.Object, error) {
+	ir, ok := o.(types.IndirectRef)
+	if !ok {
+		// Nothing do dereference.
+		return o, nil
+	}
+
+	return xRefTable.indRefToObject(&ir, false)
 }
 
 // DereferenceBoolean resolves and validates a boolean object, which may be an indirect reference.
@@ -222,7 +280,7 @@ func Text(o types.Object) (string, error) {
 	case types.HexLiteral:
 		return types.HexLiteralToString(obj)
 	default:
-		return "", errors.Errorf("pdfcpu: text: corrupt -  %v\n", obj)
+		return "", errors.Errorf("pdfcpu: corrupt text: %v\n", obj)
 	}
 }
 
@@ -338,21 +396,27 @@ func (xRefTable *XRefTable) dereferenceDestArray(o types.Object) (types.Array, e
 		}
 		arr, ok := o1.(types.Array)
 		if !ok {
-			errors.Errorf("pdfcpu: corrupted dest array:\n%s\n", o)
+			errors.Errorf("pdfcpu: invalid dest array:\n%s\n", o)
 		}
 		return arr, nil
 	}
 
-	return nil, errors.Errorf("pdfcpu: corrupted dest array:\n%s\n", o)
+	return nil, errors.Errorf("pdfcpu: invalid dest array:\n%s\n", o)
 }
 
 // DereferenceDestArray resolves the destination for key.
 func (xRefTable *XRefTable) DereferenceDestArray(key string) (types.Array, error) {
-	o, ok := xRefTable.Names["Dests"].Value(key)
-	if !ok {
-		return nil, errors.Errorf("pdfcpu: corrupted named destination for: %s", key)
+	if dNames := xRefTable.Names["Dests"]; dNames != nil {
+		if o, ok := dNames.Value(key); ok {
+			return xRefTable.dereferenceDestArray(o)
+		}
 	}
-	return xRefTable.dereferenceDestArray(o)
+
+	if o, ok := xRefTable.Dests[key]; ok {
+		return xRefTable.dereferenceDestArray(o)
+	}
+
+	return nil, errors.Errorf("pdfcpu: invalid named destination for: %s", key)
 }
 
 // DereferenceDictEntry returns a dereferenced dict entry.
@@ -377,7 +441,7 @@ func (xRefTable *XRefTable) DereferenceStringEntryBytes(d types.Dict, key string
 
 	switch o := o.(type) {
 	case types.StringLiteral:
-		bb, err := types.Unescape(o.Value(), false)
+		bb, err := types.Unescape(o.Value())
 		if err != nil {
 			return nil, err
 		}

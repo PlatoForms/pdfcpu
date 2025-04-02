@@ -33,7 +33,7 @@ The commands are:
    changeopw     change owner password
    changeupw     change user password
    collect       create custom sequence of selected pages
-   config        print configuration
+   config        list, reset configuration
    create        create PDF content including forms via JSON
    crop          set cropbox for selected pages
    cut           custom cut pages horizontally or vertically
@@ -43,7 +43,7 @@ The commands are:
    fonts         install, list supported fonts, create cheat sheets
    form          list, remove fields, lock, unlock, reset, export, fill form via JSON or CSV
    grid          rearrange pages or images for enhanced browsing experience
-   images        list images for selected pages
+   images        list, extract, update images
    import        import/convert images to PDF
    info          print file info
    keywords      list, add, remove keywords
@@ -51,11 +51,13 @@ The commands are:
    ndown         cut selected pages into n pages symmetrically
    nup           rearrange pages or images for reduced number of pages
    optimize      optimize PDF by getting rid of redundant page resources
+   pagelayout    list, set, reset page layout for opened document
+   pagemode      list, set, reset page mode for opened document
    pages         insert, remove selected pages
    paper         print list of supported paper sizes
    permissions   list, set user access permissions
    portfolio     list, add, remove, extract portfolio entries with optional description
-   poster        cut selected pages into poster using paper size or dimensions
+   poster        cut selected pages into poster by paper size or dimensions
    properties    list, add, remove document properties
    resize        scale selected pages
    rotate        rotate selected pages
@@ -63,9 +65,11 @@ The commands are:
    split         split up a PDF by span or bookmark
    stamp         add, remove, update Unicode text, image or PDF stamps for selected pages
    trim          create trimmed version of selected pages
-   validate      validate PDF against PDF 32000-1:2008 (PDF 1.7)
+   validate      validate PDF against PDF 32000-1:2008 (PDF 1.7) + basic PDF 2.0 validation
    version       print version
+   viewerpref    list, set, reset viewer preferences for opened document
    watermark     add, remove, update Unicode text, image or PDF watermarks for selected pages
+   zoom          zoom in/out of selected pages by magnification factor or corresponding margin
 
    All instantly recognizable command prefixes are supported eg. val for validation
    One letter Unix style abbreviations supported for flags and command parameters.
@@ -77,6 +81,7 @@ Use "pdfcpu help [command]" for more information about a command.`
 common flags: -v(erbose)  ... turn on logging
               -vv         ... verbose logging
               -q(uiet)    ... disable output
+              -o(ffline)  ... disable http traffic
               -c(onf)     ... set or disable config dir: $path|disable
               -opw        ... owner password
               -upw        ... user password
@@ -85,18 +90,21 @@ common flags: -v(erbose)  ... turn on logging
                                                   cm ... centimetres
                                                   mm ... millimetres`
 
-	usageValidate = "usage: pdfcpu validate [-m(ode) strict|relaxed] [-l(inks)] inFile..." + generalFlags
+	usageValidate = "usage: pdfcpu validate [-m(ode) strict|relaxed] [-l(inks) -opt(imize)] inFile..." + generalFlags
 
 	usageLongValidate = `Check inFile for specification compliance.
 
       mode ... validation mode
      links ... check for broken links
-    inFile ... a list of pdf input files
+  optimize ... optimize resources (fonts, forms, images)
+    inFile ... input PDF file
 		
 The validation modes are:
+    strict ... validates against PDF 32000-1:2008 (PDF 1.7) and rudimentary against PDF 32000:2 (PDF 2.0)
+   relaxed ... (default) like strict but doesn't complain about common seen spec violations.
 
- strict ... validates against PDF 32000-1:2008 (PDF 1.7)
-relaxed ... (default) like strict but doesn't complain about common seen spec violations.`
+Validation turns off optimization unless in verbose mode.
+You can enforce optimization using -opt=true.`
 
 	usageOptimize     = "usage: pdfcpu optimize [-stats csvFile] inFile [outFile]" + generalFlags
 	usageLongOptimize = `Read inFile, remove redundant page resources like embedded fonts and images and write the result to outFile.
@@ -106,13 +114,14 @@ relaxed ... (default) like strict but doesn't complain about common seen spec vi
     inFile ... input PDF file
    outFile ... output PDF file`
 
-	usageSplit     = "usage: pdfcpu split [-m(ode) span|bookmark] inFile outDir [span]" + generalFlags
-	usageLongSplit = `Generate a set of PDFs for the input file in outDir according to given span value or along bookmarks.
+	usageSplit     = "usage: pdfcpu split [-m(ode) span|bookmark|page] inFile outDir [span|pageNr...]" + generalFlags
+	usageLongSplit = `Generate a set of PDFs for the input file in outDir according to given span value or along bookmarks or page numbers.
 
       mode ... split mode (defaults to span)
     inFile ... input PDF file
     outDir ... output directory
       span ... split span in pages (default: 1) for mode "span"
+    pageNr ... split before a specific page number for mode "page"
       
 The split modes are:
 
@@ -120,15 +129,43 @@ The split modes are:
                    span itself defaults to 1 resulting in single page PDF files.
   
       bookmark ... Split into PDF files representing sections defined by existing bookmarks.
-                   span will be ignored.
-                   Assumption: inFile contains an outline dictionary.`
+                   Assumption: inFile contains an outline dictionary.
+                   
+      page     ... Split before specific page numbers.
+      
+Eg. pdfcpu split test.pdf .      (= pdfcpu split -m span test.pdf . 1)
+      generates:
+         test_1.pdf
+         test_2.pdf
+         etc.
 
-	usageMerge     = "usage: pdfcpu merge [-m(ode) create|append] [-s(ort) -b(ookmarks)] outFile inFile..." + generalFlags
+    pdfcpu split test.pdf . 2    (= pdfcpu split -m span test.pdf . 2)
+      generates:
+         test_1-2.pdf
+         test_3-4.pdf
+         etc.
+
+    pdfcpu split -m bookmark test.pdf .
+      generates:
+         test_bm1Title_1-4.pdf
+         test_bm2Title.5-7-pdf
+         etc.
+
+    pdfcpu split -m page test.pdf . 2 4 10
+      generates:
+         test_1.pdf
+         test_2-3.pdf
+         test_4-9.pdf
+         test_10-20.pdf`
+
+	usageMerge     = "usage: pdfcpu merge [-m(ode) create|append|zip] [ -s(ort) -b(ookmarks) -d(ivider) -opt(imize)] outFile inFile..." + generalFlags
 	usageLongMerge = `Concatenate a sequence of PDFs/inFiles into outFile.
 
       mode ... merge mode (defaults to create)
       sort ... sort inFiles by file name
  bookmarks ... create bookmarks
+   divider ... insert blank page between merged documents
+  optimize ... optimize before writing (default: true)
    outFile ... output PDF file
     inFile ... a list of PDF files subject to concatenation.
     
@@ -138,8 +175,12 @@ The merge modes are:
 
     append ... if outFile does not exist, it will be created (like in default mode).
                if outFile already exists, inFiles will be appended to outFile.
+
+       zip ... zip inFile1 and inFile2 into outFile (which will be created and possibly overwritten).
                
-Skip bookmark creation like so: -bookmarks=false`
+Skip bookmark creation: -b(ookmarks)=false
+
+Skip optimization before writing: -opt(imize)=false`
 
 	usagePageSelection = `'-pages' selects pages for processing and is a comma separated list of expressions:
 
@@ -191,12 +232,12 @@ content ... extract raw page content
 	usageAttachList    = "pdfcpu attachments list    inFile"
 	usageAttachAdd     = "pdfcpu attachments add     inFile file..."
 	usageAttachRemove  = "pdfcpu attachments remove  inFile [file...]"
-	usageAttachExtract = "pdfcpu attachments extract inFile outDir [file...]" + generalFlags
+	usageAttachExtract = "pdfcpu attachments extract inFile outDir [file...]"
 
 	usageAttach = "usage: " + usageAttachList +
 		"\n       " + usageAttachAdd +
 		"\n       " + usageAttachRemove +
-		"\n       " + usageAttachExtract
+		"\n       " + usageAttachExtract + generalFlags
 
 	usageLongAttach = `Manage embedded file attachments.
 
@@ -210,12 +251,12 @@ content ... extract raw page content
 	usagePortfolioList    = "pdfcpu portfolio list    inFile"
 	usagePortfolioAdd     = "pdfcpu portfolio add     inFile file[,desc]..."
 	usagePortfolioRemove  = "pdfcpu portfolio remove  inFile [file...]"
-	usagePortfolioExtract = "pdfcpu portfolio extract inFile outDir [file...]" + generalFlags
+	usagePortfolioExtract = "pdfcpu portfolio extract inFile outDir [file...]"
 
 	usagePortfolio = "usage: " + usagePortfolioList +
 		"\n       " + usagePortfolioAdd +
 		"\n       " + usagePortfolioRemove +
-		"\n       " + usagePortfolioExtract
+		"\n       " + usagePortfolioExtract + generalFlags
 
 	usageLongPortfolio = `Manage portfolio entries.
 
@@ -231,16 +272,39 @@ content ... extract raw page content
            pdfcpu portfolio add test.pdf "test.mp3, Test sound file" "test.mkv, Test video file"
     `
 
-	usagePermList = "pdfcpu permissions list [-upw userpw] [-opw ownerpw] inFile"
-	usagePermSet  = "pdfcpu permissions set [-perm none|print|all] [-upw userpw] -opw ownerpw inFile" + generalFlags
+	usagePermList = "pdfcpu permissions list [-upw userpw] [-opw ownerpw] inFile..."
+	usagePermSet  = "pdfcpu permissions set [-perm none|print|all|max4Hex|max12Bits] [-upw userpw] -opw ownerpw inFile"
 
 	usagePerm = "usage: " + usagePermList +
-		"\n       " + usagePermSet
+		"\n       " + usagePermSet + generalFlags
 
 	usageLongPerm = `Manage user access permissions.
 
       perm ... user access permissions
-    inFile ... input PDF file`
+    inFile ... input PDF file
+    
+   perm modes:
+      
+           none: 000000000000 (x000)
+          print: 100000000100 (x804)
+            all: 111100111100 (xF3C)
+        max4Hex: x + max. 3 hex digits
+      max12Bits: max. 12 binary digits
+
+   using the permission bits:
+
+      1:  -
+      2:  -
+      3:  Print (security handlers rev.2), draft print (security handlers >= rev.3)
+      4:  Modify contents by operations other than controlled by bits 6, 9, 11.
+      5:  Copy, extract text & graphics
+      6:  Add or modify annotations, fill form fields, in conjunction with bit 4 create/mod form fields.
+      7:  -
+      8:  -
+      9: Fill form fields (security handlers >= rev.3)
+     10: Copy, extract text & graphics (security handlers >= rev.3) (unused since PDF 2.0)
+     11: Assemble document (security handlers >= rev.3)
+     12: Print (security handlers >= rev.3)`
 
 	usageEncrypt     = "usage: pdfcpu encrypt [-m(ode) rc4|aes] [-key 40|128|256] [-perm none|print|all] [-upw userpw] -opw ownerpw inFile [outFile]" + generalFlags
 	usageLongEncrypt = `Setup password protection based on user and owner password.
@@ -249,7 +313,9 @@ content ... extract raw page content
        key ... key length in bits (default=256)
       perm ... user access permissions
     inFile ... input PDF file
-   outFile ... output PDF file`
+   outFile ... output PDF file
+   
+   PDF 2.0 files have to be encrypted using aes/256.`
 
 	usageDecrypt     = "usage: pdfcpu decrypt [-upw userpw] [-opw ownerpw] inFile [outFile]" + generalFlags
 	usageLongDecrypt = `Remove password protection and reset permissions.
@@ -281,7 +347,7 @@ content ... extract raw page content
          Use the following format strings:
                %p ... current page number
                %P ... total pages
-         eg. pdfcpu stamp add -mode text -- "Page %p of %P" "sc:1.0 abs, pos:bc, rot:0" in.pdf out.pdf
+         eg. pdfcpu stamp add -mode text -- "Page %p of %P" "scale:1.0 abs, pos:bc, rot:0" in.pdf out.pdf
    
    2) image based
       -mode image imageFileName
@@ -289,10 +355,18 @@ content ... extract raw page content
          eg. pdfcpu stamp add -mode image -- "logo.png" "" in.pdf out.pdf
          
    3) PDF based
-      -mode pdf pdfFileName[:page#]
-         eg. pdfcpu stamp add -mode pdf -- "stamp.pdf:3" "" in.pdf out.pdf ... stamp each page of in.pdf with page 3 of stamp.pdf
-         Omit page# for multistamping:
-         eg. pdfcpu stamp add -mode pdf -- "stamp.pdf" "" in.pdf out.pdf   ... stamp each page of in.pdf with corresponding page of stamp.pdf
+      -mode pdf PDFFileName:page#
+         Stamp selected pages of infile with one specific page of a stamp PDF file.
+         Eg: pdfcpu stamp add -mode pdf -- "stamp.pdf:3" "" in.pdf out.pdf ... stamp each page of in.pdf with page 3 of stamp.pdf
+           
+      -mode pdf PDFFileName
+         Multistamp your file, meaning apply all pages of a stamp PDF file one by one to ascending pages of inFile.
+         Eg: pdfcpu stamp add -mode pdf -- "stamp.pdf" "" in.pdf out.pdf ... multistamp all pages of in.pdf with ascending pages of stamp.pdf
+   
+      -mode pdf PDFFileName:startPage#Src:startPage#Dest
+         Customize your multistamp by starting with startPage#Src of a stamp PDF file.
+         Apply repeatedly pages of the stamp file to inFile starting at startPage#Dest.
+         Eg: pdfcpu stamp add -mode pdf -- "stamp.pdf:2:3" "" in.pdf out.pdf ... multistamp starting with page 2 of stamp.pdf onto page 3 of in.pdf
    `
 
 	usageWatermarkMode = `There are 3 different kinds of watermarks:
@@ -303,7 +377,7 @@ content ... extract raw page content
          Use the following format strings:
                %p ... current page number
                %P ... total pages
-         eg. pdfcpu watermark add -mode text -- "Page %p of %P" "sc:1.0 abs, pos:bc, rot:0" in.pdf out.pdf
+         eg. pdfcpu watermark add -mode text -- "Page %p of %P" "scale:1.0 abs, pos:bc, rot:0" in.pdf out.pdf
    
    2) image based
       -mode image imageFileName
@@ -311,11 +385,18 @@ content ... extract raw page content
          eg. pdfcpu watermark add -mode image -- "logo.png" "" in.pdf out.pdf
          
    3) PDF based
-      -mode pdf PDFFileName[:page#]
-         eg. pdfcpu watermark add -mode pdf -- "stamp.pdf:3" "" in.pdf out.pdf ... watermark each page of in.pdf with page 3 of stamp.pdf
-         Omit page# for multistamping:
-         eg. pdfcpu watermark add -mode pdf -- "stamp.pdf" "" in.pdf out.pdf   ... watermark each page of in.pdf with corresponding page of stamp.pdf
+      -mode pdf PDFFileName:page#
+         Watermark selected pages of infile with one specific page of a watermark PDF file.
+         Eg: pdfcpu watermark add -mode pdf -- "watermark.pdf:3" "" in.pdf out.pdf ... watermark each page of in.pdf with page 3 of watermark.pdf
+        
+      -mode pdf PDFFileName
+         Multiwatermark your file, meaning apply all pages of a watermark PDF file one by one to ascending pages of inFile.
+         Eg: pdfcpu watermark add -mode pdf -- "watermark.pdf" "" in.pdf out.pdf ... multiwatermark all pages of in.pdf with ascending pages of watermark.pdf
 
+      -mode pdf PDFFileName:startPage#Src:startPage#Dest
+         Customize your multiwatermark by starting with startPage#Src of a watermark PDF file.
+         Apply repeatedly pages of the watermark file to inFile starting at startPage#Dest.
+         Eg: pdfcpu watermark add -mode pdf -- "watermark.pdf:2:3" "" in.pdf out.pdf ... multiwatermark starting with page 2 of watermark.pdf onto page 3 of in.pdf
 
    A watermark is the first content that gets rendered for a page.
    The visibility of the watermark depends on the transparency of all layers rendered on top.
@@ -324,9 +405,17 @@ content ... extract raw page content
 
 <description> is a comma separated configuration string containing these optional entries:
    
-   (defaults: "font:Helvetica, points:24, rtl:off, pos:c, off:0,0 sc:0.5 rel, rot:0, d:1, op:1, m:0 and for all colors: 0.5 0.5 0.5")
+   (defaults: "font:Helvetica, points:24, rtl:off, pos:c, off:0,0 scale:0.5 rel, rot:0, d:1, op:1, m:0 and for all colors: 0.5 0.5 0.5")
 
    fontname:         Please refer to "pdfcpu fonts list"
+
+   scriptname:       to avoid embedding of big font files
+
+                     ISO-15924 code    CID System Info
+                     Hans              UniGB-UTF16-H  / GB1
+                     Hant              UniCNS-UTF16-H / CNS1
+                     Hira, Kana, Jpan  UniJIS-UTF16-H / Japan1
+                     Hang, Kore        UniKS-UTF16-H  / KR
 
    points:           fontsize in points, in combination with absolute scaling only.
 
@@ -387,20 +476,20 @@ A color value: 3 color intensities, where 0.0 < i < 1.0, eg 1.0,
 
 All configuration string parameters support completion.
 
-e.g. "pos:bl, off: 20 5"   "rot:45"                 "op:0.5, sc:0.5 abs, rot:0"
-     "d:2"                 "sc:.75 abs, points:48"  "rot:-90, scale:0.75 rel"
-     "f:Courier, sc:0.75, str: 0.5 0.0 0.0, rot:20"
+e.g. "pos:bl, off: 20 5"   "rot:45"                 "op:0.5, scale:0.5 abs, rot:0"
+     "d:2"                 "scale:.75 abs, points:48"  "rot:-90, scale:0.75 rel"
+     "f:Courier, scale:0.75, str: 0.5 0.0 0.0, rot:20"
 
 
 `
 
 	usageStampAdd    = "pdfcpu stamp add    [-p(ages) selectedPages] -m(ode) text|image|pdf -- string|file description inFile [outFile]"
 	usageStampUpdate = "pdfcpu stamp update [-p(ages) selectedPages] -m(ode) text|image|pdf -- string|file description inFile [outFile]"
-	usageStampRemove = "pdfcpu stamp remove [-p(ages) selectedPages] inFile [outFile]" + generalFlags
+	usageStampRemove = "pdfcpu stamp remove [-p(ages) selectedPages] inFile [outFile]"
 
 	usageStamp = "usage: " + usageStampAdd +
 		"\n       " + usageStampUpdate +
-		"\n       " + usageStampRemove
+		"\n       " + usageStampRemove + generalFlags
 
 	usageLongStamp = `Process stamping for selected pages. 
 
@@ -419,11 +508,11 @@ description ... fontname, points, position, offset, scalefactor, aligntext, rota
 
 	usageWatermarkAdd    = "pdfcpu watermark add    [-p(ages) selectedPages] -m(ode) text|image|pdf -- string|file description inFile [outFile]"
 	usageWatermarkUpdate = "pdfcpu watermark update [-p(ages) selectedPages] -m(ode) text|image|pdf -- string|file description inFile [outFile]"
-	usageWatermarkRemove = "pdfcpu watermark remove [-p(ages) selectedPages] inFile [outFile]" + generalFlags
+	usageWatermarkRemove = "pdfcpu watermark remove [-p(ages) selectedPages] inFile [outFile]"
 
 	usageWatermark = "usage: " + usageWatermarkAdd +
 		"\n       " + usageWatermarkUpdate +
-		"\n       " + usageWatermarkRemove
+		"\n       " + usageWatermarkRemove + generalFlags
 
 	usageLongWatermark = `Process watermarking for selected pages. 
 
@@ -444,7 +533,7 @@ If outFile already exists the page sequence will be appended.
 Each imageFile will be rendered to a separate page.
 In its simplest form this converts an image into a PDF: "pdfcpu import img.pdf img.jpg"
 
-description ... dimensions, format, position, offset, scale factor, boxes
+description ... dimensions, formsize, position, offset, scale factor, boxes
     outFile ... output PDF file
   imageFile ... a list of image files
   
@@ -452,7 +541,7 @@ description ... dimensions, format, position, offset, scale factor, boxes
 
   optional entries:
 
-      (defaults: "d:595 842, f:A4, pos:full, off:0 0, sc:0.5 rel, dpi:72, gray:off, sepia:off")
+      (defaults: "dim:595 842, f:A4, pos:full, off:0 0, sc:0.5 rel, dpi:72, gray:off, sepia:off")
 
   dimensions:      (width height) in given display unit eg. '400 200' setting the media box
 
@@ -480,30 +569,57 @@ description ... dimensions, format, position, offset, scale factor, boxes
 
   backgroundcolor: "bgcolor" is also accepted.
   
-  Only one of dimensions or format is allowed.
+  Only one of dimensions or formsize is allowed.
   position: full => image dimensions equal page dimensions.
   
   All configuration string parameters support completion.
 
-  e.g. "f:A5, pos:c"                              ... render the image centered on A5 with relative scaling 0.5.'
-       "d:300 600, pos:bl, off:20 20, sc:1.0 abs" ... render the image anchored to bottom left corner with offset 20,20 and abs. scaling 1.0.
-       "pos:full"                                 ... render the image to a page with corresponding dimensions.
-       "f:A4, pos:c, dpi:300"                     ... render the image centered on A4 respecting a destination resolution of 300 dpi.
-       `
+  e.g. "f:A5, pos:c"                                ... render the image centered on A5 with relative scaling 0.5.'
+       "dim:300 600, pos:bl, off:20 20, sc:1.0 abs" ... render the image anchored to bottom left corner with offset 20,20 and abs. scaling 1.0.
+       "pos:full"                                   ... render the image to a page with corresponding dimensions.
+       "f:A4, pos:c, dpi:300"                       ... render the image centered on A4 respecting a destination resolution of 300 dpi.`
 
-	usagePagesInsert = "pdfcpu pages insert [-p(ages) selectedPages] [-m(ode) before|after] inFile [outFile]"
-	usagePagesRemove = "pdfcpu pages remove  -p(ages) selectedPages  inFile [outFile]" + generalFlags
-
-	usagePages = "usage: " + usagePagesInsert +
-		"\n       " + usagePagesRemove
+	usagePagesInsert = "pdfcpu pages insert [-p(ages) selectedPages] [-m(ode) before|after] [description] inFile [outFile]"
+	usagePagesRemove = "pdfcpu pages remove  -p(ages) selectedPages  inFile [outFile]"
+	usagePages       = "usage: " + usagePagesInsert +
+		"\n       " + usagePagesRemove + generalFlags
 
 	usageLongPages = `Manage pages.
 
       pages ... Please refer to "pdfcpu selectedpages"
        mode ... before, after (default: before)
+description ... dimensions, formsize
      inFile ... input PDF file
     outFile ... output PDF file
 
+  <description> is a comma separated configuration string containing:
+
+  optional entries:
+
+      (defaults: "dim:595 842, f:A4")
+
+  dimensions:      (width height) in given display unit eg. '400 200' setting the media box
+
+  formsize:        eg. A4, Letter, Legal...
+                   Append 'L' to enforce landscape mode. (eg. A3L)
+                   Append 'P' to enforce portrait mode. (eg. TabloidP)
+                   Please refer to "pdfcpu paper" for a comprehensive list of defined paper sizes.
+                   "papersize" is also accepted.
+
+   All configuration string parameters support completion.
+    
+   Examples:      pdfcpu pages insert in.pdf
+                  Insert one blank page before each page using the form size imposed internally by the current media box.
+                  
+                  pdfcpu pages insert -pages 3 "f:A5L" in.pdf
+                  Insert one blank A5 page in landscape mode before page 3.
+
+                  pdfcpu pages insert "dim: 10 5" -u cm in.pdf
+                  Insert one blank 10 x 5 cm separator page for all pages.
+
+                  pdfcpu pages remove -p odd in.pdf out.pdf
+                  pdfcpu pages remove -pages=odd in.pdf out.pdf
+                  Remove all odd pages.
 `
 
 	usageRotate     = "usage: pdfcpu rotate [-p(ages) selectedPages] inFile rotation [outFile]" + generalFlags
@@ -522,7 +638,7 @@ This reduces the number of pages and therefore the required print time.
 If the input is one imageFile a single page n-up PDF gets generated.
 
       pages ... inFile only, please refer to "pdfcpu selectedpages"
-description ... dimensions, format, orientation
+description ... dimensions, formsize, orientation
     outFile ... output PDF file
           n ... the n-Up value (see below for details)
      inFile ... input PDF file
@@ -541,23 +657,30 @@ description ... dimensions, format, orientation
 
     optional entries:
   
-        (defaults: "di:595 842, form:A4, or:rd, bo:on, ma:3")
+        (defaults: "di:595 842, form:A4, or:rd, bo:on, ma:3, enforce:on")
   
     dimensions:      (width,height) in given display unit eg. '400 200'
+
     formsize:        The output sheet size, eg. A4, Letter, Legal...
                      Append 'L' to enforce landscape mode. (eg. A3L)
                      Append 'P' to enforce portrait mode. (eg. TabloidP)
-                     Only one of dimensions or format is allowed.
+                     Only one of dimensions or formsize is allowed.
                      Please refer to "pdfcpu paper" for a comprehensive list of defined paper sizes.
                      "papersize" is also accepted.
+
     orientation:     one of rd ... right down (=default)
                             dr ... down right
                             ld ... left down
                             dl ... down left
                      Orientation applies to PDF input files only.
-    border:          Print border (on/off, true/false, t/f) 
+
+    enforce:         enforce best-fit orientation of individual content (on/off, true/false, t/f).
+
+    border:          Print border (on/off, true/false, t/f)
+
     margin:          for n-up content: float >= 0 in given display unit
-    backgroundcolor: backgound color for margin > 0.
+    
+    backgroundcolor: background color for margin > 0.
                      "bgcolor" is also accepted.
 
 All configuration string parameters support completion.
@@ -572,10 +695,10 @@ Examples: pdfcpu nup out.pdf 4 in.pdf
            in.pdf's page size will be preserved.
 
           pdfcpu nup out.pdf 9 logo.jpg
-           Arrange instances of logo.jpg into a 3x3 grid and write result to out.pdf using the A4 default format.
+           Arrange instances of logo.jpg into a 3x3 grid and write result to out.pdf using the A4 default form size.
           
           pdfcpu nup -- "form:Tabloid" out.pdf 4 *.jpg 
-           Rearrange all jpg files into 2x2 grids and write result to out.pdf using the Tabloid format
+           Rearrange all jpg files into 2x2 grids and write result to out.pdf using the Tabloid form size
            and the default orientation.
 
 `
@@ -586,64 +709,111 @@ Examples: pdfcpu nup out.pdf 4 in.pdf
               pages       ... for inFile only, please refer to "pdfcpu selectedpages"
               description ... dimensions, formsize, border, margin
               outFile     ... output PDF file
-              n           ... booklet style (2 or 4)
+              n           ... booklet style (2, 4, 6, 8)
               inFile      ... input PDF file
               imageFiles  ... input image file(s)
 
-There are two styles of booklet, depending on your page/input and sheet/output size:
+There are several styles of booklet, depending on your page/input and sheet/output size, 
+the edge along which your booklet will be bound,
+and your preferred method for creating the booklet.
 
-n=2: Two of your pages fit on one side of a sheet (eg statement on letter, A5 on A4)
+For assembly instructions for each type, see: https://pdfcpu.io/generate/booklet
+
+n=2: This is the simplest case and the most common for those printing at home.
+Two of your pages fit on one side of a sheet (eg statement on letter, A5 on A4)
 Assemble by printing on both sides (odd pages on the front and even pages on the back) and folding down the middle.
 
-A variant of n=2 is a technique to bind your own hardback book.
-It works best when the source PDF holding your book content has at least 128 pages.
-You bind your paper in eight sheet folios each making up 32 pages of your book.
-Each sheet is going to make four pages of your book, gets printed on both sides and folded in half.
-For such a multi folio booklet set 'multifolio:on' and play around with 'foliosize' which defaults to 8.
+n=4: Four of your pages fit on one side of a sheet (eg statement on ledger, A5 on A3, A6 on A4).
 
-n=4: Four of your pages fit on one side of a sheet (eg statement on ledger, A5 on A3, A6 on A4)
-Assemble by printing on both sides, then cutting the sheets horizontally.
-The sets of pages on the bottom of the sheet are rotated so that the cut side of the
-paper is on the bottom of the booklet for every page. After cutting, place the bottom
-set of pages after the top set of pages in the booklet. Then fold the half sheets.
+When printing 4-up, your booklet can be bound either along the long-edge (for portrait this is the left side of the paper, for landscape the top)
+or the short-edge (for portrait this is the top of the paper, for landscape the left side). 
+Using a different binding will change the ordering of the pages on the sheet. 
+You can set long or short-edge with the 'binding' option.
+
+In 4-up printing, the sets of pages on the bottom of the sheet are rotated so that the cut side of the
+paper is on the bottom of the booklet for every page (for the default portrait, long-edge binding case.
+Similar rotation logic applies for the other three orientations). 
+Having the cut edge always on bottom makes for more uniform pages within the book and less work in trimming.
+
+The btype=advanced is a special method for assembling, only for 4-up booklets.
+Printers that are used to collating first and then cutting may prefer this method.
+
+n=6: Six of your pages fit on one side of a sheet. This produces an unusual sized booklet. 
+
+Only available for portrait, long-edge orientation.
+
+n=8: Eight of your pages fit on one side of a sheet (eg A6 on A3).
+
+Only available for portrait, long-edge orientation.
+
+Perfect binding is a special type of booklet. The main difference is that the binding is glued into a spine,
+meaning that the pages are cut along the binding and not folded as in the other forms of booklet.
+This results in a different page ordering on the sheet than the other methods. If you intend to perfect bind your booklet,
+use btype=perfectbound.
+
+There is also an option to use signatures, a bookbinding method useful for books with higher page counts.
+In this method of binding, you arrange your folios (sheets folded in half) in groups of 'foliosize'.
+Each group is called a signature. You then stack the signatures together to form the book.
+For example, you can bind your paper in groups of eight sheets (foliosize=8), so that each signature containing 32 pages of your book.
+For such a multi folio booklet set 'multifolio:on' and 'foliosize', which defaults to 8.
+The last signature may be shorter, e.g. for a booklet of 120 pages with signature size=16 (foliosize=4) will have 7 complete signatures and a final signature of only 8 pages.
+
 
                              portrait landscape
- Possible values for n: 2 ...  1x2       2x1
+ Possible values for n: 2 ...  1x2       --
                         4 ...  2x2       2x2
+                        6 ...  2x3       --
+                        8 ...  2x4       --
 
 <description> is a comma separated configuration string containing these optional entries:
 
-   (defaults: "dim:595 842, formsize:A4, border:off, guides:off, margin:0")
+   (defaults: "dim:595 842, formsize:A4, btype: booklet, binding: long, multifolio: false, border:off, guides:off, margin:0")
 
    dimensions:       (width,height) of the output sheet in given display unit eg. '400 200'
    formsize:         The output sheet size, eg. A4, Letter, Legal...
                      Append 'L' to enforce landscape mode. (eg. A3L)
                      Append 'P' to enforce portrait mode. (eg. TabloidP)
-                     Only one of dimensions or format is allowed.
+                     Only one of dimensions or formsize is allowed.
                      Please refer to "pdfcpu paper" for a comprehensive list of defined paper sizes.
                      "papersize" is also accepted.
+   btype:            The method for arranging pages into a booklet. (booklet, bookletadvanced, perfectbound)
+   binding:          The edge of the paper which has the binding. (long, short)
    multifolio:       Generate multi folio booklet (on/off, true/false, t/f) for n=2 and PDF input only.
    foliosize:        folio size for multi folio booklets only (default:8)
    border:           Print border (on/off, true/false, t/f) 
    guides:           Print folding and cutting lines (on/off, true/false, t/f)
    margin:           Apply content margin (float >= 0 in given display unit)
-   backgroundcolor:  sheet backgound color for margin > 0.
+   backgroundcolor:  sheet background color for margin > 0.
                      "bgcolor" is also accepted.
 
 All configuration string parameters support completion.
 
-Examples: pdfcpu booklet -- "formsize:Letter" out.pdf 2 in.pdf
-           Arrange pages of in.pdf 2 per sheet side (4 per sheet, back and front) onto out.pdf
+Examples:
 
-          pdfcpu booklet -- "formsize:Ledger" out.pdf 4 in.pdf"
-           Arrange pages of in.pdf 4 per sheet side (8 per sheet, back and front) onto out.pdf
+   pdfcpu booklet -- "formsize:Letter" out.pdf 2 in.pdf
+      Arrange pages of in.pdf 2 per sheet side (4 per sheet, back and front) onto out.pdf
 
-          pdfcpu booklet -- "formsize:A4" out.pdf 2 in.pdf
-           Arrange pages of in.pdf 2 per sheet side (4 per sheet, back and front) onto out.pdf
+   pdfcpu booklet -- "formsize:Ledger" out.pdf 4 in.pdf
+      Arrange pages of in.pdf 4 per sheet side (8 per sheet, back and front) onto out.pdf
+           
+   pdfcpu booklet -- "formsize:Ledger" out.pdf 6 in.pdf
+      Arrange pages of in.pdf 6 per sheet side (12 per sheet, back and front) onto out.pdf
+  
+   pdfcpu booklet -- "formsize:A3" out.pdf 8 in.pdf
+      Arrange pages of in.pdf 8 per sheet side (16 per sheet, back and front) onto out.pdf
 
-          pdfcpu booklet -- "formsize:A4, multifolio:on" hardbackbook.pdf 2 in.pdf
-           Arrange pages of in.pdf 2 per sheetside as sequence of folios covering 4*foliosize pages each.
-           See also: https://www.instructables.com/How-to-bind-your-own-Hardback-Book/
+   pdfcpu booklet -- "formsize:A3, binding:short" out.pdf 4 in.pdf
+      Arrange pages of in.pdf 4 per sheet side, with short-edge binding onto out.pdf
+
+   pdfcpu booklet -- "formsize:A4, multifolio:on" hardbackbook.pdf 2 in.pdf
+      Arrange pages of in.pdf 2 per sheetside as sequence of folios covering 4*foliosize pages each.
+      See also: https://www.instructables.com/How-to-bind-your-own-Hardback-Book/
+
+   pdfcpu booklet -- "formsize:A4, btype:perfectbound" out.pdf 2 in.pdf
+      Arrange pages of in.pdf 2 per sheet side, arranged for perfect binding, onto out.pdf
+  
+   pdfcpu booklet -- "formsize:A3, btype:bookletadvanced" out.pdf 4 in.pdf
+      Arrange pages of in.pdf 4 per sheet side, arranged for advanced binding, onto out.pdf
 `
 
 	usageGrid     = "usage: pdfcpu grid [-p(ages) selectedPages] -- [description] outFile m n inFile|imageFiles..." + generalFlags
@@ -653,7 +823,7 @@ For image inputfiles each output page shows all images laid out onto grids of gi
 This command produces poster like PDF pages convenient for page and image browsing. 
 
       pages ... Please refer to "pdfcpu selectedpages"
-description ... dimensions, format, orientation
+description ... dimensions, formsize, orientation, enforce
     outFile ... output PDF file
           m ... grid lines
           n ... grid columns
@@ -664,21 +834,27 @@ description ... dimensions, format, orientation
 
     optional entries:
   
-        (defaults: "d:595 842, form:A4, o:rd, bo:on, ma:3")
+        (defaults: "d:595 842, form:A4, o:rd, bo:on, ma:3, enforce:on")
   
     dimensions:   (width height) in given display unit eg. '400 200'
+
     formsize:     The output sheet size, eg. A4, Letter, Legal...
                   Append 'L' to enforce landscape mode. (eg. A3L)
                   Append 'P' to enforce portrait mode. (eg. TabloidP)
-                  Only one of dimensions or format is allowed.
+                  Only one of dimensions or formsize is allowed.
                   Please refer to "pdfcpu paper" for a comprehensive list of defined paper sizes.
                   "papersize" is also accepted.
+
     orientation:  one of rd ... right down (=default)
                          dr ... down right
                          ld ... left down
                          dl ... down left
                   Orientation applies to PDF input files only.
-    border:       Print border (on/off, true/false, t/f) 
+
+    enforce:      enforce best-fit orientation of individual content (on/off, true/false, t/f).
+
+    border:       Print border (on/off, true/false, t/f)
+    
     margin:       Apply content margin (float >= 0 in given display unit)
 
 All configuration string parameters support completion.
@@ -761,23 +937,21 @@ Examples: pdfcpu grid out.pdf 1 10 in.pdf
    Kiku4, Kiku5
    AB, B40, Shikisen`
 
-	usageVersion     = "usage: pdfcpu version [-v(erbose)|vv]"
-	usageLongVersion = "Print the pdfcpu version."
+	usageVersion     = "usage: pdfcpu version"
+	usageLongVersion = "Print the pdfcpu version & build info."
 
 	usagePaper     = "usage: pdfcpu paper"
 	usageLongPaper = "Print a list of supported paper sizes."
 
-	usageConfig     = "usage: pdfcpu config"
-	usageLongConfig = "Print configuration."
-
 	usageSelectedPages     = "usage: pdfcpu selectedpages"
 	usageLongSelectedPages = "Print definition of the -pages flag."
 
-	usageInfo     = "usage: pdfcpu info [-p(ages) selectedPages] [-j(son)] inFile..." + generalFlags
+	usageInfo     = "usage: pdfcpu info [-p(ages) selectedPages] [-f(onts) -j(son)] inFile..." + generalFlags
 	usageLongInfo = `Print info about a PDF file.
    
    pages ... Please refer to "pdfcpu selectedpages"
-    json ... Produce JSON output
+   fonts ... include font info
+    json ... output JSON
   inFile ... a list of PDF input files`
 
 	usageFontsList       = "pdfcpu fonts list"
@@ -793,11 +967,11 @@ Create single page PDF cheat sheets in current dir.`
 
 	usageKeywordsList   = "pdfcpu keywords list    inFile"
 	usageKeywordsAdd    = "pdfcpu keywords add     inFile keyword..."
-	usageKeywordsRemove = "pdfcpu keywords remove  inFile [keyword...]" + generalFlags
+	usageKeywordsRemove = "pdfcpu keywords remove  inFile [keyword...]"
 
 	usageKeywords = "usage: " + usageKeywordsList +
 		"\n       " + usageKeywordsAdd +
-		"\n       " + usageKeywordsRemove
+		"\n       " + usageKeywordsRemove + generalFlags
 
 	usageLongKeywords = `Manage keywords.
 
@@ -813,11 +987,11 @@ Create single page PDF cheat sheets in current dir.`
 
 	usagePropertiesList   = "pdfcpu properties list    inFile"
 	usagePropertiesAdd    = "pdfcpu properties add     inFile nameValuePair..."
-	usagePropertiesRemove = "pdfcpu properties remove  inFile [name...]" + generalFlags
+	usagePropertiesRemove = "pdfcpu properties remove  inFile [name...]"
 
 	usageProperties = "usage: " + usagePropertiesList +
 		"\n       " + usagePropertiesAdd +
-		"\n       " + usagePropertiesRemove
+		"\n       " + usagePropertiesRemove + generalFlags
 
 	usageLongProperties = `Manage document properties.
 
@@ -899,11 +1073,11 @@ Examples:
 
 	usageBoxesList   = "pdfcpu boxes list    [-p(ages) selectedPages] -- [boxTypes] inFile"
 	usageBoxesAdd    = "pdfcpu boxes add     [-p(ages) selectedPages] -- description inFile [outFile]"
-	usageBoxesRemove = "pdfcpu boxes remove  [-p(ages) selectedPages] -- boxTypes inFile [outFile]" + generalFlags
+	usageBoxesRemove = "pdfcpu boxes remove  [-p(ages) selectedPages] -- boxTypes inFile [outFile]"
 
 	usageBoxes = "usage: " + usageBoxesList +
 		"\n       " + usageBoxesAdd +
-		"\n       " + usageBoxesRemove
+		"\n       " + usageBoxesRemove + generalFlags
 
 	usageLongBoxes = `Manage page boundaries.
 
@@ -930,10 +1104,10 @@ Examples:
 ` + usageBoxDescription
 
 	usageAnnotsList   = "pdfcpu annotations list   [-p(ages) selectedPages] inFile"
-	usageAnnotsRemove = "pdfcpu annotations remove [-p(ages) selectedPages] inFile [outFile] [objNr|annotId|annotType]..." + generalFlags
+	usageAnnotsRemove = "pdfcpu annotations remove [-p(ages) selectedPages] inFile [outFile] [objNr|annotId|annotType]..."
 
 	usageAnnots = "usage: " + usageAnnotsList +
-		"\n       " + usageAnnotsRemove
+		"\n       " + usageAnnotsRemove + generalFlags
 
 	usageLongAnnots = `Manage annotations.
    
@@ -971,16 +1145,48 @@ Examples:
          pdfcpu annot remove in.pdf out.pdf Link 30 Text someId
       `
 
-	usageImagesList = "pdfcpu images list [-p(ages) selectedPages] inFile..." + generalFlags
+	usageImagesList    = "pdfcpu images list    [-p(ages) selectedPages] -- inFile..."
+	usageImagesExtract = "pdfcpu images extract [-p(ages) selectedPages] -- inFile outDir"
+	usageImagesUpdate  = "pdfcpu images update inFile imageFile [outFile] [ objNr | (pageNr Id) ]"
 
-	usageImages = "usage: " + usageImagesList
+	usageImages = "usage: " + usageImagesList +
+		"\n       " + usageImagesExtract +
+		"\n       " + usageImagesUpdate + generalFlags
 
-	usageLongImages = `Manage keywords.
+	usageLongImages = `Manage images.
 
      pages ... Please refer to "pdfcpu selectedpages"
     inFile ... input PDF file
+ imageFile ... image file
+   outFile ... output PDF file
+     objNr ... obj# from "pdfcpu images list"
+    pageNr ... Page from "pdfcpu images list"
+        Id ... Id from "pdfcpu images list"
     
-    Example: pdfcpu images list -p "1-5" gallery.pdf
+    Example: pdfcpu images list gallery.pdf
+             gallery.pdf:
+             1 images available (1.8 MB)
+             Page Obj# │ Id  │ Type  SoftMask ImgMask │ Width │ Height │ ColorSpace Comp bpc Interp │   Size │ Filters
+             ━━━━━━━━━━┿━━━━━┿━━━━━━━━━━━━━━━━━━━━━━━━┿━━━━━━━┿━━━━━━━━┿━━━━━━━━━━━━━━━━━━━━━━━━━━━━┿━━━━━━━━┿━━━━━━━━━━━━
+                1    3 │ Im0 │ image                  │  1268 │    720 │  DeviceRGB    3   8    *   │ 1.8 MB │ FlateDecode
+
+             # Extract all images into the current dir
+             pdfcpu images extract gallery.pdf .
+             extracting images from gallery.pdf into ./ ...
+             optimizing...
+             writing gallery_1_Im0.png
+
+             # Update image with Id=Im0 on page=1 with gallery_1_Im0.png
+             pdfcpu images update gallery.pdf gallery_1_Im0.png
+             pdfcpu images update gallery.pdf gallery_1_Im0.png out.pdf
+
+             # Update image object 3 with logo.png
+             pdfcpu images update gallery.pdf logo.png 3
+             pdfcpu images update gallery.pdf logo.png out.pdf 3
+
+             # update image with Id=Im0 on page=1 with logo.jpg
+             pdfcpu images update gallery.pdf logo.jpg 1 Im0
+             pdfcpu images update gallery.pdf logo.jpg out.pdf 1 Im0
     `
 
 	usageCreate     = "usage: pdfcpu create inFileJSON [inFile] outFile" + generalFlags
@@ -989,8 +1195,8 @@ Append new page content to existing page content in inFile and write result to o
 If inFile is absent outFile will be overwritten.
 
    inFileJSON ... input json file
-   inFile     ... optional input PDF file 
-   outFile    ... output PDF file
+       inFile ... optional input PDF file 
+      outFile ... output PDF file
 
 A minimalistic sample json:
 {
@@ -1036,16 +1242,16 @@ For more info on json syntax & samples please refer to :
 
 	usageLongForm = `Manage PDF forms.
 
-      inFile      ... input PDF file
-      inFileData  ... input CSV or JSON file
-      inFileJSON  ... input JSON file
-      outFile     ... output PDF file
+           inFile ... input PDF file
+       inFileData ... input CSV or JSON file
+       inFileJSON ... input JSON file
+          outFile ... output PDF file
       outFileJSON ... output JSON file
-      mode        ... output mode (defaults to single)
-      outDir      ... output directory
-      outName     ... base output name
-      fieldID     ... as indicated by "pdfcpu form list"
-      fieldName   ... as indicated by "pdfcpu form list"
+             mode ... output mode (defaults to single)
+           outDir ... output directory
+          outName ... base output name
+          fieldID ... as indicated by "pdfcpu form list"
+        fieldName ... as indicated by "pdfcpu form list"
 
 The output modes are:
 
@@ -1172,10 +1378,10 @@ description ... scalefactor, dimensions, formsize, enforce, border, bgcolor
 	usagePoster     = "usage: pdfcpu poster [-p(ages) selectedPages] -- description inFile outDir [outFileName]" + generalFlags
 	usageLongPoster = `Create a poster using paper size.
 
-   pages       ... Please refer to "pdfcpu selectedpages"
+         pages ... Please refer to "pdfcpu selectedpages"
    description ... formsize(=papersize), dimensions, scalefactor, margin, bgcolor, border
-   inFile      ... input PDF file
-   outDir      ... output directory
+        inFile ... input PDF file
+        outDir ... output directory
    outFileName ... output file name
 
    Optionally scale up your page dimensions then define the poster grid tile size via form size or dimensions.
@@ -1203,11 +1409,11 @@ description ... scalefactor, dimensions, formsize, enforce, border, bgcolor
    Examples:
 
          pdfcpu poster "f:A4" in.pdf outDir
-            Page format is A2, the printer supports A4.
+            Page form size is A2, the printer supports A4.
             Generate a poster(A2) via a corresponding 2x2 grid of A4 pages.
          
          pdfcpu poster "f:A4, scale:2.0" in.pdf outDir
-            Page format is A2, the printer supports A4.
+            Page form size is A2, the printer supports A4.
             Generate a poster(A0) via a corresponding 4x4 grid of A4 pages.
 
          pdfcpu poster -u cm -- "dim:15 10, margin:1, bgcol:DarkGray, border:on" in.pdf outDir
@@ -1218,11 +1424,11 @@ description ... scalefactor, dimensions, formsize, enforce, border, bgcolor
 	usageNDown     = "usage: pdfcpu ndown [-p(ages) selectedPages] -- [description] n inFile outDir [outFileName]" + generalFlags
 	usageLongNDown = `Cut selected page into n pages symmetrically.
 
-   pages       ... Please refer to "pdfcpu selectedpages"
+         pages ... Please refer to "pdfcpu selectedpages"
    description ... margin, bgcolor, border
-   n           ... the n-Down value (see below for details)
-   inFile      ... input PDF file
-   outDir      ... output directory
+             n ... the n-Down value (see below for details)
+        inFile ... input PDF file
+        outDir ... output directory
    outFileName ... output file name
 
    <description> is a comma separated configuration string containing:
@@ -1247,15 +1453,15 @@ description ... scalefactor, dimensions, formsize, enforce, border, bgcolor
    Examples:
 
          pdfcpu ndown 2 in.pdf outDir
-            Page format is A2, the printer supports A3.
+            Page form size is A2, the printer supports A3.
             Quick cut page into 2 equally sized pages.
 
          pdfcpu ndown 4 in.pdf outDir
-            Page format is A2, the printer supports A4.
+            Page form size is A2, the printer supports A4.
             Quick cut page into 4 equally (A4) sized pages.
 
          pdfcpu ndown -u cm -- "margin:1, bgcol:DarkGray, border:on" 4 in.pdf outDir
-            Page format is A2, the printer supports A4.
+            Page format size is A2, the printer supports A4.
             Quick cut page into 4 equally (A4) sized pages and provide a glue area of 1 cm.
             
    See also the related commands: poster, cut`
@@ -1263,10 +1469,10 @@ description ... scalefactor, dimensions, formsize, enforce, border, bgcolor
 	usageCut     = "usage: pdfcpu cut [-p(ages) selectedPages] -- description inFile outDir [outFileName]" + generalFlags
 	usageLongCut = `Custom cut pages horizontally or vertically.
 
-   pages       ... Please refer to "pdfcpu selectedpages"
+         pages ... Please refer to "pdfcpu selectedpages"
    description ... horizontal, vertical, margin, bgcolor, border
-   inFile      ... input PDF file
-   outDir      ... output directory
+        inFile ... input PDF file
+        outDir ... output directory
    outFileName ... output file name
 
    Fine grained custom page cutting.
@@ -1317,9 +1523,200 @@ description ... scalefactor, dimensions, formsize, enforce, border, bgcolor
 
 	usageLongBookmarks = `Manage bookmarks.
 
-      inFile      ... input PDF file
-      inFileJSON  ... input JSON file
-      outFile     ... output PDF file
+           inFile ... input PDF file
+       inFileJSON ... input JSON file
+          outFile ... output PDF file
       outFileJSON ... output PDF file
 `
+
+	usagePageLayoutList  = "pdfcpu pagelayout list  inFile"
+	usagePageLayoutSet   = "pdfcpu pagelayout set   inFile value"
+	usagePageLayoutReset = "pdfcpu pagelayout reset inFile"
+
+	usagePageLayout = "usage: " + usagePageLayoutList +
+		"\n       " + usagePageLayoutSet +
+		"\n       " + usagePageLayoutReset + generalFlags
+
+	usageLongPageLayout = `Manage the page layout which shall be used when the document is opened:
+
+    inFile ... input PDF file
+     value ... one of:
+
+     SinglePage     ... Display one page at a time (default)
+     TwoColumnLeft  ... Display the pages in two columns, with odd- numbered pages on the left
+     TwoColumnRight ... Display the pages in two columns, with odd- numbered pages on the right
+     TwoPageLeft    ... Display the pages two at a time, with odd-numbered pages on the left
+     TwoPageRight   ... Display the pages two at a time, with odd-numbered pages on the right
+    
+    Eg. set page layout:
+           pdfcpu pagelayout set test.pdf TwoPageLeft
+
+        reset page layout:
+           pdfcpu pagelayout reset test.pdf
+`
+
+	usagePageModeList  = "pdfcpu pagemode list  inFile"
+	usagePageModeSet   = "pdfcpu pagemode set   inFile value"
+	usagePageModeReset = "pdfcpu pagemode reset inFile"
+
+	usagePageMode = "usage: " + usagePageModeList +
+		"\n       " + usagePageModeSet +
+		"\n       " + usagePageModeReset + generalFlags
+
+	usageLongPageMode = `Manage how the document shall be displayed when opened:
+
+    inFile ... input PDF file
+     value ... one of:
+
+            UseNone ... Neither document outline nor thumbnail images visible (default)
+        UseOutlines ... Document outline visible
+          UseThumbs ... Thumbnail images visible
+         FullScreen ... Full-screen mode, with no menu bar, window controls, or any other window visible
+              UseOC ... Optional content group panel visible (since PDF 1.5)
+     UseAttachments ... Attachments panel visible (since PDF 1.6)
+    
+    Eg. set page mode:
+           pdfcpu pagemode set test.pdf UseOutlines
+
+        reset page mode:
+           pdfcpu pagemode reset test.pdf
+    `
+
+	usageViewerPreferencesList  = "pdfcpu viewerpref list [-a(ll)] [-j(son)] inFile"
+	usageViewerPreferencesSet   = "pdfcpu viewerpref set                     inFile (inFileJSON | JSONstring)"
+	usageViewerPreferencesReset = "pdfcpu viewerpref reset                   inFile"
+
+	usageViewerPreferences = "usage: " + usageViewerPreferencesList +
+		"\n       " + usageViewerPreferencesSet +
+		"\n       " + usageViewerPreferencesReset + generalFlags
+
+	usageLongViewerPreferences = `Manage the way the document shall be displayed on the screen and shall be printed:
+
+              all ... output all (including default values)
+             json ... output JSON
+           inFile ... input PDF file
+       inFileJSON ... input JSON file containing viewing preferences
+       JSONstring ... JSON string containing viewing preferences
+             
+    
+    The preferences are:
+
+      HideToolbar           ... Hide tool bars when the document is active (default=false).
+      HideMenubar           ... Hide the menu bar when the document is active (default=false).
+      HideWindowUI          ... Hide user interface elements in the document’s window (default=false).
+      FitWindow             ... Resize the document’s window to fit the size of the first displayed page (default=false).
+      CenterWindow          ... Position the document’s window in the centre of the screen (default=false).
+      DisplayDocTitle       ... true: The window’s title bar should display the document title taken from the dc:title element of the XMP metadata stream.
+                                false: The title bar should display the name of the PDF file containing the document (default=false).
+
+      NonFullScreenPageMode ... How to display the document on exiting full-screen mode:
+                                    UseNone     = Neither document outline nor thumbnail images visible (=default)
+                                    UseOutlines = Document outline visible
+                                    UseThumbs   = Thumbnail images visible
+                                    UseOC       = Optional content group panel visible
+
+      Direction             ... The predominant logical content order for text
+                                    L2R         = Left to right (=default)
+                                    R2L         = Right to left (including vertical writing systems, such as Chinese, Japanese, and Korean)
+
+      ViewArea              ... The name of the page boundary representing the area of a page that shall be displayed when viewing the document on the screen.
+      ViewClip              ... The name of the page boundary to which the contents of a page shall be clipped when viewing the document on the screen.
+      PrintArea             ... The name of the page boundary representing the area of a page that shall be rendered when printing the document.
+      PrintClip             ... The name of the page boundary to which the contents of a page shall be clipped when printing the document.
+                                    All 4 since PDF 1.4 and deprecated as of PDF 2.0                              
+                                    Page Boundaries: MediaBox, CropBox(=default), TrimBox, BleedBox, ArtBox                             
+
+      Duplex                ... The paper handling option that shall be used when printing the file from the print dialogue (since PDF 1.7):
+                                    Simplex             = Print single-sided
+                                    DuplexFlipShortEdge = Duplex and flip on the short edge of the sheet
+                                    DuplexFlipLongEdge  = Duplex and flip on the long edge of the sheet
+
+      PickTrayByPDFSize     ... Whether the PDF page size shall be used to select the input paper tray.
+
+      PrintPageRange        ... The page numbers used to initialize the print dialogue box when the file is printed (since PDF 1.7).
+                                The array shall contain an even number of integers to be interpreted in pairs, with each pair specifying
+                                the first and last pages in a sub-range of pages to be printed. The first page of the PDF file shall be denoted by 1.
+      
+      NumCopies             ... The number of copies that shall be printed when the print dialog is opened for this file (since PDF 1.7).
+     
+      Enforce               ... Array of names of Viewer preference settings that shall be enforced by PDF processors and
+                                that shall not be overridden by subsequent selections in the application user interface (since PDF 2.0).
+                                    Possible values: PrintScaling
+
+    Eg. list viewer preferences:
+         pdfcpu viewerpref list test.pdf
+         pdfcpu viewerpref list -all test.pdf
+         pdfcpu viewerpref list -json test.pdf
+         pdfcpu viewerpref list -all -json test.pdf
+
+   reset viewer preferences:
+         pdfcpu viewerpref reset test.pdf
+
+   set printer preferences via JSON string (case agnostic):
+         pdfcpu viewerpref set test.pdf "{\"HideMenuBar\": true, \"CenterWindow\": true}"
+         pdfcpu viewerpref set test.pdf "{\"duplex\": \"duplexFlipShortEdge\", \"printPageRange\": [1, 4, 10, 12], \"NumCopies\": 3}"
+
+   set viewer preferences via JSON file:
+         pdfcpu viewerpref set test.pdf viewerpref.json
+
+         and eg. viewerpref.json (each preference is optional!):
+
+         {
+            "viewerPreferences": {
+               "HideToolBar": true,
+               "HideMenuBar": false,
+               "HideWindowUI": false,
+               "FitWindow": true,
+               "CenterWindow": true,
+               "DisplayDocTitle": true,
+               "NonFullScreenPageMode": "UseThumbs",
+               "Direction": "R2L",
+               "Duplex": "Simplex",
+               "PickTrayByPDFSize": false,
+               "PrintPageRange": [
+                  1, 4,
+                  10, 20
+               ],
+               "NumCopies": 3,
+               "Enforce": [
+                  "PrintScaling"
+               ]
+            }
+         }
+   
+    `
+
+	usageZoom = "usage: pdfcpu zoom [-p(ages) selectedPages] -- description inFile [outFile]" + generalFlags
+
+	usageLongZoom = `Zoom in/out of selected pages either by magnification factor or corresponding margin.
+
+      pages ... Please refer to "pdfcpu selectedpages"
+description ... factor, hmargin, vmargin, border, bgcolor
+     inFile ... input PDF file
+    outFile ... output PDF file
+
+Examples:
+   pdfcpu zoom -- "factor: 2"  in.pdf out.pdf           ... zoom in to magnification of 200%
+   pdfcpu zoom -- "factor: .5" in.pdf out.pdf           ... zoom out to magnification of 50%
+   
+   pdfcpu zoom -- "hmargin: -10" in.pdf out.pdf         ... zoom in to horizontal margin of -10 points
+   pdfcpu zoom -- "hmargin:  10" in.pdf out.pdf         ... zoom out to horizontal margin of 10 points
+
+   pdfcpu zoom -unit cm -- "hmargin: -1" in.pdf out.pdf ... zoom in to horizontal margin of -1 cm
+   pdfcpu zoom -unit cm -- "hmargin:  1" in.pdf out.pdf ... zoom out to horizontal margin of 1 cm
+   
+   pdfcpu zoom -- "vmargin: -10" in.pdf out.pdf         ... zoom in to vertical margin of -10 points
+   pdfcpu zoom -- "vmargin:  10" in.pdf out.pdf         ... zoom out to vertical margin of 10 points
+
+   pdfcpu zoom -unit cm -- "vmargin: -1" in.pdf out.pdf ... zoom in to vertical margin of -1 cm
+   pdfcpu zoom -unit cm -- "vmargin: 1, border:true, bgcolor:lightgray" in.pdf out.pdf ... zoom out to vertical margin of 1 cm
+`
+
+	usageConfigList  = "pdfcpu config list"
+	usageConfigReset = "pdfcpu config reset"
+
+	usageConfig = "usage: " + usageConfigList +
+		"\n       " + usageConfigReset + generalFlags
+
+	usageLongConfig = `Manage your pdfcpu configuration.`
 )

@@ -44,7 +44,7 @@ const (
 	FTRadioButtonGroup
 )
 
-func (ft FieldType) string() string {
+func (ft FieldType) String() string {
 	var s string
 	switch ft {
 	case FTText:
@@ -65,14 +65,15 @@ func (ft FieldType) string() string {
 
 // Field represents a form field for s particular page number.
 type Field struct {
-	Pages  []int
-	Locked bool
-	Typ    FieldType
-	ID     string
-	Name   string
-	Dv     string
-	V      string
-	Opts   string
+	Pages   []int
+	Locked  bool
+	Typ     FieldType
+	ID      string
+	Name    string
+	AltName string
+	Dv      string
+	V       string
+	Opts    string
 }
 
 func (f Field) pageString() string {
@@ -88,8 +89,8 @@ func (f Field) pageString() string {
 }
 
 type FieldMeta struct {
-	def, val, opt                           bool
-	pageMax, defMax, valMax, idMax, nameMax int
+	altName, def, val, opt                              bool
+	pageMax, defMax, valMax, idMax, nameMax, altNameMax int
 }
 
 func fields(xRefTable *model.XRefTable) (types.Array, error) {
@@ -218,18 +219,46 @@ func isField(xRefTable *model.XRefTable, indRef types.IndirectRef, fields types.
 func extractStringSlice(a types.Array) ([]string, error) {
 	var ss []string
 	for _, o := range a {
-		sl, _ := o.(types.StringLiteral)
+		sl, ok := o.(types.StringLiteral)
+		if ok {
+			s, err := types.StringLiteralToString(sl)
+			if err != nil {
+				return nil, err
+			}
+			s = strings.TrimSpace(s)
+			if len(s) > 0 {
+				ss = append(ss, s)
+			}
+			continue
+		}
+		arr, ok := o.(types.Array)
+		if !ok || len(arr) != 2 {
+			return nil, errors.New("corrupt choice field")
+		}
+		sl, ok = arr[1].(types.StringLiteral)
+		if !ok {
+			return nil, errors.New("corrupt choice field")
+		}
 		s, err := types.StringLiteralToString(sl)
 		if err != nil {
 			return nil, err
 		}
-		ss = append(ss, s)
+		s = strings.TrimSpace(s)
+		if len(s) > 0 {
+			ss = append(ss, s)
+		}
 	}
 	return ss, nil
 }
 
-func parseOptions(xRefTable *model.XRefTable, d types.Dict) ([]string, error) {
-	o, _ := d.Find("Opt")
+func parseOptions(xRefTable *model.XRefTable, d types.Dict, required bool) ([]string, error) {
+	o, ok := d.Find("Opt")
+	if !ok {
+		if required {
+			return nil, errors.New("corrupt form field: missing entry \"Opt\"")
+		}
+		return nil, nil
+	}
 	a, err := xRefTable.DereferenceArray(o)
 	if err != nil {
 		return nil, err
@@ -263,27 +292,33 @@ func parseStringLiteralArray(xRefTable *model.XRefTable, d types.Dict, key strin
 	return nil, nil
 }
 
-func collectRadioButtonGroupOptions(xRefTable *model.XRefTable, d types.Dict) (string, error) {
+func collectRadioButtonGroupOptions(xRefTable *model.XRefTable, d types.Dict) ([]string, error) {
 
-	var vv []string
+	vv, err := parseOptions(xRefTable, d, OPTIONAL)
+	if err != nil {
+		return nil, err
+	}
+	if len(vv) > 0 {
+		return vv, nil
+	}
 
 	for _, o := range d.ArrayEntry("Kids") {
 		d, err := xRefTable.DereferenceDict(o)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		d1 := d.DictEntry("AP")
 		if d1 == nil {
-			return "", errors.New("corrupt form field: missing entry AP")
+			return nil, errors.New("corrupt form field: missing entry \"AP\"")
 		}
 		d2 := d1.DictEntry("N")
 		if d2 == nil {
-			return "", errors.New("corrupt AP field: missing entry N")
+			return nil, errors.New("corrupt AP field: missing entry \"N\"")
 		}
 		for k := range d2 {
 			k, err := types.DecodeName(k)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 			if k != "Off" {
 				found := false
@@ -301,12 +336,22 @@ func collectRadioButtonGroupOptions(xRefTable *model.XRefTable, d types.Dict) (s
 		}
 	}
 
-	return strings.Join(vv, ","), nil
+	return vv, nil //strings.Join(vv, ","), nil
 }
 
 func collectRadioButtonGroup(xRefTable *model.XRefTable, d types.Dict, f *Field, fm *FieldMeta) error {
 
 	f.Typ = FTRadioButtonGroup
+
+	opts, err := collectRadioButtonGroupOptions(xRefTable, d)
+	if err != nil {
+		return err
+	}
+
+	f.Opts = strings.Join(opts, ",")
+	if len(f.Opts) > 0 {
+		fm.opt = true
+	}
 
 	if s := d.NameEntry("V"); s != nil {
 		v, err := types.DecodeName(*s)
@@ -314,22 +359,23 @@ func collectRadioButtonGroup(xRefTable *model.XRefTable, d types.Dict, f *Field,
 			return err
 		}
 		if v != "Off" {
+			if len(opts) > 0 {
+				j, err := strconv.Atoi(v)
+				if err == nil {
+					for i, o := range opts {
+						if i == j {
+							v = o
+							break
+						}
+					}
+				}
+			}
 			if w := runewidth.StringWidth(v); w > fm.valMax {
 				fm.valMax = w
 			}
 			fm.val = true
 			f.V = v
 		}
-	}
-
-	s, err := collectRadioButtonGroupOptions(xRefTable, d)
-	if err != nil {
-		return err
-	}
-
-	f.Opts = s
-	if len(f.Opts) > 0 {
-		fm.opt = true
 	}
 
 	return nil
@@ -359,15 +405,13 @@ func collectBtn(xRefTable *model.XRefTable, d types.Dict, f *Field, fm *FieldMet
 		f.Dv = dv
 	}
 
-	if len(d.ArrayEntry("Kids")) > 0 {
-		if ff != nil && primitives.FieldFlags(*ff)&primitives.FieldRadio > 0 {
-			return collectRadioButtonGroup(xRefTable, d, f, fm)
-		}
+	if len(d.ArrayEntry("Kids")) > 1 {
+		return collectRadioButtonGroup(xRefTable, d, f, fm)
 	}
 
 	f.Typ = FTCheckBox
 	if o, found := d.Find("V"); found {
-		if o.(types.Name) == "Yes" {
+		if o.(types.Name) != "Off" {
 			v := "Yes"
 			if len(v) > fm.valMax {
 				fm.valMax = len(v)
@@ -380,7 +424,7 @@ func collectBtn(xRefTable *model.XRefTable, d types.Dict, f *Field, fm *FieldMet
 	return nil
 }
 
-func collectComboBox(xRefTable *model.XRefTable, d types.Dict, f *Field, fm *FieldMeta) error {
+func collectComboBox(d types.Dict, f *Field, fm *FieldMeta) error {
 	f.Typ = FTComboBox
 	if sl := d.StringLiteralEntry("V"); sl != nil {
 		v, err := types.StringLiteralToString(*sl)
@@ -464,7 +508,7 @@ func collectListBox(xRefTable *model.XRefTable, multi bool, d types.Dict, f *Fie
 func collectCh(xRefTable *model.XRefTable, d types.Dict, f *Field, fm *FieldMeta) error {
 	ff := d.IntEntry("Ff")
 
-	vv, err := parseOptions(xRefTable, d)
+	vv, err := parseOptions(xRefTable, d, REQUIRED)
 	if err != nil {
 		return err
 	}
@@ -475,7 +519,7 @@ func collectCh(xRefTable *model.XRefTable, d types.Dict, f *Field, fm *FieldMeta
 	}
 
 	if ff != nil && primitives.FieldFlags(*ff)&primitives.FieldCombo > 0 {
-		return collectComboBox(xRefTable, d, f, fm)
+		return collectComboBox(d, f, fm)
 	}
 
 	multi := ff != nil && (primitives.FieldFlags(*ff)&primitives.FieldMultiselect > 0)
@@ -485,10 +529,13 @@ func collectCh(xRefTable *model.XRefTable, d types.Dict, f *Field, fm *FieldMeta
 
 func collectTx(xRefTable *model.XRefTable, d types.Dict, f *Field, fm *FieldMeta) error {
 	if o, found := d.Find("V"); found {
-		sl, _ := o.(types.StringLiteral)
-		s, err := types.StringLiteralToString(sl)
+		s1, err := types.StringOrHexLiteral(o)
 		if err != nil {
 			return err
+		}
+		s := ""
+		if s1 != nil {
+			s = *s1
 		}
 		v := s
 		if i := strings.Index(s, "\n"); i >= 0 {
@@ -502,10 +549,17 @@ func collectTx(xRefTable *model.XRefTable, d types.Dict, f *Field, fm *FieldMeta
 		f.V = v
 	}
 	if o, found := d.Find("DV"); found {
-		sl, _ := o.(types.StringLiteral)
-		s, err := types.StringLiteralToString(sl)
+		o1, err := xRefTable.Dereference(o)
 		if err != nil {
 			return err
+		}
+		s1, err := types.StringOrHexLiteral(o1)
+		if err != nil {
+			return err
+		}
+		s := ""
+		if s1 != nil {
+			s = *s1
 		}
 		dv := s
 		if i := strings.Index(s, "\n"); i >= 0 {
@@ -574,8 +628,29 @@ func collectPageField(
 	if ft == nil {
 		ft = d.NameEntry("FT")
 		if ft == nil {
-			return errors.Errorf("pdfcpu: corrupt form field %s: missing entry FT\n%s", f.ID, d)
+			return errors.Errorf("pdfcpu: corrupt form field %s: missing entry \"FT\"\n%s", f.ID, d)
 		}
+	}
+
+	if o, found := d.Find("TU"); found {
+		s1, err := types.StringOrHexLiteral(o)
+		if err != nil {
+			return err
+		}
+		s := ""
+		if s1 != nil {
+			s = *s1
+		}
+		if len(s) > 80 {
+			s = s[:40]
+		}
+		altName := s
+
+		if w := runewidth.StringWidth(altName); w > fm.altNameMax {
+			fm.altNameMax = w
+		}
+		fm.altName = true
+		f.AltName = altName
 	}
 
 	var err error
@@ -696,6 +771,15 @@ func calcListHeader(fm *FieldMeta) (string, []int) {
 		horSep = append(horSep, 6)
 	}
 
+	if fm.altName {
+		s += draw.VBar + " AltName "
+		if fm.altNameMax > 7 {
+			s += strings.Repeat(" ", fm.altNameMax-7)
+			horSep = append(horSep, 9+fm.altNameMax-7)
+		} else {
+			horSep = append(horSep, 9)
+		}
+	}
 	if fm.def {
 		s += draw.VBar + " Default "
 		if fm.defMax > 7 {
@@ -743,7 +827,7 @@ func multiPageFieldsMap(fs []Field) map[string][]Field {
 	return m
 }
 
-func renderMultiPageFields(ctx *model.Context, m map[string][]Field, fm *FieldMeta) ([]string, error) {
+func renderMultiPageFields(m map[string][]Field, fm *FieldMeta) ([]string, error) {
 
 	var ss []string
 
@@ -774,13 +858,17 @@ func renderMultiPageFields(ctx *model.Context, m map[string][]Field, fm *FieldMe
 				l = "*"
 			}
 
-			t := f.Typ.string()
+			t := f.Typ.String()
 
 			pageFill := strings.Repeat(" ", fm.pageMax-runewidth.StringWidth(f.pageString()))
 			idFill := strings.Repeat(" ", fm.idMax-runewidth.StringWidth(f.ID))
 			nameFill := strings.Repeat(" ", fm.nameMax-runewidth.StringWidth(f.Name))
 			s := fmt.Sprintf("%s%s %s %-9s %s %s%s %s %s%s ", p, pageFill, l, t, draw.VBar, f.ID, idFill, draw.VBar, f.Name, nameFill)
 			p = strings.Repeat(" ", len(p))
+			if fm.altName {
+				altNameFill := strings.Repeat(" ", fm.altNameMax-runewidth.StringWidth(f.AltName))
+				s += fmt.Sprintf("%s %s%s ", draw.VBar, f.AltName, altNameFill)
+			}
 			if fm.def {
 				dvFill := strings.Repeat(" ", fm.defMax-runewidth.StringWidth(f.Dv))
 				s += fmt.Sprintf("%s %s%s ", draw.VBar, f.Dv, dvFill)
@@ -809,7 +897,7 @@ func renderFields(ctx *model.Context, fs []Field, fm *FieldMeta) ([]string, erro
 	m := multiPageFieldsMap(fs)
 
 	if len(m) > 0 {
-		ss1, err := renderMultiPageFields(ctx, m, fm)
+		ss1, err := renderMultiPageFields(m, fm)
 		if err != nil {
 			return nil, err
 		}
@@ -847,12 +935,16 @@ func renderFields(ctx *model.Context, fs []Field, fm *FieldMeta) ([]string, erro
 			l = "*"
 		}
 
-		t := f.Typ.string()
+		t := f.Typ.String()
 
 		pageFill := strings.Repeat(" ", fm.pageMax-runewidth.StringWidth(f.pageString()))
 		idFill := strings.Repeat(" ", fm.idMax-runewidth.StringWidth(f.ID))
 		nameFill := strings.Repeat(" ", fm.nameMax-runewidth.StringWidth(f.Name))
 		s := fmt.Sprintf("%s%s %s %-9s %s %s%s %s %s%s ", p, pageFill, l, t, draw.VBar, f.ID, idFill, draw.VBar, f.Name, nameFill)
+		if fm.altName {
+			altNameFill := strings.Repeat(" ", fm.altNameMax-runewidth.StringWidth(f.AltName))
+			s += fmt.Sprintf("%s %s%s ", draw.VBar, f.AltName, altNameFill)
+		}
 		if fm.def {
 			dvFill := strings.Repeat(" ", fm.defMax-runewidth.StringWidth(f.Dv))
 			s += fmt.Sprintf("%s %s%s ", draw.VBar, f.Dv, dvFill)
@@ -881,7 +973,7 @@ func FormFields(ctx *model.Context) ([]Field, *FieldMeta, error) {
 		return nil, nil, err
 	}
 
-	fm := &FieldMeta{pageMax: 2, idMax: 3, nameMax: 4, defMax: 7, valMax: 5}
+	fm := &FieldMeta{pageMax: 2, idMax: 3, nameMax: 4, altNameMax: 7, defMax: 7, valMax: 5}
 
 	fs, err := collectFields(xRefTable, fields, fm)
 	if err != nil {
@@ -1031,7 +1123,7 @@ func removeIndRefByIndex(indRefs []types.IndirectRef, i int) []types.IndirectRef
 	return indRefs[:lastIndex]
 }
 
-func removeFromFields(xRefTable *model.XRefTable, indRefs *[]types.IndirectRef, fields *types.Array) error {
+func removeFormFields(xRefTable *model.XRefTable, indRefs *[]types.IndirectRef, fields *types.Array) error {
 	f := types.Array{}
 	for _, v := range *fields {
 		indRef1 := v.(types.IndirectRef)
@@ -1065,7 +1157,7 @@ func removeFromFields(xRefTable *model.XRefTable, indRefs *[]types.IndirectRef, 
 		if err != nil {
 			return err
 		}
-		if err := removeFromFields(xRefTable, indRefs, &kids); err != nil {
+		if err := removeFormFields(xRefTable, indRefs, &kids); err != nil {
 			return err
 		}
 		if len(kids) > 0 {
@@ -1144,7 +1236,7 @@ func RemoveFormFields(ctx *model.Context, fieldIDsOrNames []string) (bool, error
 	copy(indRefsClone, indRefs)
 
 	// Remove fields from AcroDict.
-	if err := removeFromFields(xRefTable, &indRefsClone, &fields); err != nil {
+	if err := removeFormFields(xRefTable, &indRefsClone, &fields); err != nil {
 		return false, err
 	}
 
@@ -1188,6 +1280,13 @@ func RemoveFormFields(ctx *model.Context, fieldIDsOrNames []string) (bool, error
 		return false, errors.New("pdfcpu: Some form fields could not be removed")
 	}
 
+	// pdfcpu provides all appearance streams for form fields.
+	// Yet for some files and viewers form fields don't get rendered.
+	// In these cases you can order the viewer to provide form field appearance streams.
+	if ctx.NeedAppearances {
+		xRefTable.Form["NeedAppearances"] = types.Boolean(true)
+	}
+
 	return ok, nil
 }
 
@@ -1223,11 +1322,11 @@ func resetBtn(xRefTable *model.XRefTable, d types.Dict) error {
 		}
 		d1 := d.DictEntry("AP")
 		if d1 == nil {
-			return errors.New("corrupt form field: missing entry AP")
+			return errors.New("corrupt form field: missing entry \"AP\"")
 		}
 		d2 := d1.DictEntry("N")
 		if d2 == nil {
-			return errors.New("corrupt AP field: missing entry N")
+			return errors.New("corrupt AP field: missing entry \"N\"")
 		}
 		for k := range d2 {
 			k, err := types.DecodeName(k)
@@ -1306,10 +1405,10 @@ func resetMultiListBox(xRefTable *model.XRefTable, d types.Dict, opts []string) 
 func resetCh(ctx *model.Context, d types.Dict, fonts map[string]types.IndirectRef) error {
 	ff := d.IntEntry("Ff")
 	if ff == nil {
-		return errors.New("pdfcpu: corrupt form field: missing entry Ff")
+		return errors.New("pdfcpu: corrupt form field: missing entry \"Ff\"")
 	}
 
-	opts, err := parseOptions(ctx.XRefTable, d)
+	opts, err := parseOptions(ctx.XRefTable, d, REQUIRED)
 	if err != nil {
 		return err
 	}
@@ -1344,8 +1443,12 @@ func resetTx(ctx *model.Context, d types.Dict, fonts map[string]types.IndirectRe
 		err error
 	)
 	if o, found := d.Find("DV"); found {
-		d["V"] = o
-		sl, _ := o.(types.StringLiteral)
+		o1, err := ctx.Dereference(o)
+		if err != nil {
+			return err
+		}
+		d["V"] = o1
+		sl, _ := o1.(types.StringLiteral)
 		s, err = types.StringLiteralToString(sl)
 		if err != nil {
 			return err
@@ -1368,7 +1471,8 @@ func resetTx(ctx *model.Context, d types.Dict, fonts map[string]types.IndirectRe
 	} else {
 		ff := d.IntEntry("Ff")
 		multiLine := ff != nil && uint(primitives.FieldFlags(*ff))&uint(primitives.FieldMultiline) > 0
-		err = primitives.EnsureTextFieldAP(ctx, d, s, multiLine, fonts)
+		comb := ff != nil && uint(primitives.FieldFlags(*ff))&uint(primitives.FieldComb) > 0
+		err = primitives.EnsureTextFieldAP(ctx, d, s, multiLine, comb, 0, fonts)
 	}
 
 	return err
@@ -1423,7 +1527,7 @@ func resetPageFields(
 		if ft == nil {
 			ft = d.NameEntry("FT")
 			if ft == nil {
-				return errors.Errorf("pdfcpu: corrupt form field %s: missing entry FT\n%s", fi.id, d)
+				return errors.Errorf("pdfcpu: corrupt form field %s: missing entry \"FT\"\n%s", fi.id, d)
 			}
 		}
 
@@ -1499,6 +1603,13 @@ func ResetFormFields(ctx *model.Context, fieldIDsOrNames []string) (bool, error)
 		}
 	}
 
+	// pdfcpu provides all appearance streams for form fields.
+	// Yet for some files and viewers form fields don't get rendered.
+	// In these cases you can order the viewer to provide form field appearance streams.
+	if ctx.NeedAppearances {
+		xRefTable.Form["NeedAppearances"] = types.Boolean(true)
+	}
+
 	return ok, nil
 }
 
@@ -1516,7 +1627,7 @@ func ensureAP(ctx *model.Context, d types.Dict, fi *fieldInfo, fonts map[string]
 	if ft == nil {
 		ft = d.NameEntry("FT")
 		if ft == nil {
-			return errors.Errorf("pdfcpu: corrupt form field %s: missing entry FT\n%s", fi.id, d)
+			return errors.Errorf("pdfcpu: corrupt form field %s: missing entry \"FT\"\n%s", fi.id, d)
 		}
 	}
 
@@ -1656,6 +1767,13 @@ func LockFormFields(ctx *model.Context, fieldIDsOrNames []string) (bool, error) 
 		}
 	}
 
+	// pdfcpu provides all appearance streams for form fields.
+	// Yet for some files and viewers form fields don't get rendered.
+	// In these cases you can order the viewer to provide form field appearance streams.
+	if ctx.NeedAppearances {
+		xRefTable.Form["NeedAppearances"] = types.Boolean(true)
+	}
+
 	return ok, nil
 }
 
@@ -1671,7 +1789,7 @@ func deleteAP(d types.Dict, fi *fieldInfo) error {
 	if ft == nil {
 		ft = d.NameEntry("FT")
 		if ft == nil {
-			return errors.Errorf("pdfcpu: corrupt form field %s: missing entry FT\n%s", fi.id, d)
+			return errors.Errorf("pdfcpu: corrupt form field %s: missing entry \"FT\"\n%s", fi.id, d)
 		}
 	}
 	if *ft == "Ch" {
@@ -1770,6 +1888,13 @@ func UnlockFormFields(ctx *model.Context, fieldIDsOrNames []string) (bool, error
 		if err := unlockPageFields(xRefTable, fieldIDsOrNames, fields, wAnnots, &ok); err != nil {
 			return false, err
 		}
+	}
+
+	// pdfcpu provides all appearance streams for form fields.
+	// Yet for some files and viewers form fields don't get rendered.
+	// In these cases you can order the viewer to provide form field appearance streams.
+	if ctx.NeedAppearances {
+		xRefTable.Form["NeedAppearances"] = types.Boolean(true)
 	}
 
 	return ok, nil

@@ -886,7 +886,11 @@ func validateExtGStateDictPart2(xRefTable *model.XRefTable, d types.Dict, dictNa
 	}
 
 	// SM, number, optional, since V1.3, smoothness tolerance
-	_, err = validateNumberEntry(xRefTable, d, dictName, "SM", OPTIONAL, model.V13, nil)
+	sinceVersion := model.V13
+	if xRefTable.ValidationMode == model.ValidationRelaxed {
+		sinceVersion = model.V12
+	}
+	_, err = validateNumberEntry(xRefTable, d, dictName, "SM", OPTIONAL, sinceVersion, nil)
 	if err != nil {
 		return err
 	}
@@ -986,7 +990,21 @@ func validateExtGStateDict(xRefTable *model.XRefTable, o types.Object) error {
 		return err
 	}
 
-	return validateExtGStateDictPart3(xRefTable, d, dictName)
+	err = validateExtGStateDictPart3(xRefTable, d, dictName)
+	if err != nil {
+		return err
+	}
+
+	// Check for AAPL extensions.
+	o, _, err = d.Entry(dictName, "AAPL:AA", OPTIONAL)
+	if err != nil {
+		return err
+	}
+	if o != nil {
+		xRefTable.CustomExtensions = true
+	}
+
+	return nil
 }
 
 func validateExtGStateResourceDict(xRefTable *model.XRefTable, o types.Object, sinceVersion model.Version) error {

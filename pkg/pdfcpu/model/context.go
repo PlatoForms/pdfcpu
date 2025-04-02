@@ -238,30 +238,6 @@ func (rc *ReadContext) ObjectStreamsString() (int, string) {
 	return len(objStreams), strings.Join(objStreams, ",")
 }
 
-// IsXRefStreamObject returns true if object #i is a an xref stream.
-func (rc *ReadContext) IsXRefStreamObject(i int) bool {
-	return rc.XRefStreams[i]
-}
-
-// XRefStreamsString returns a formatted string and the number of xref stream objects.
-func (rc *ReadContext) XRefStreamsString() (int, string) {
-
-	var objs []int
-	for k := range rc.XRefStreams {
-		if rc.XRefStreams[k] {
-			objs = append(objs, k)
-		}
-	}
-	sort.Ints(objs)
-
-	var xrefStreams []string
-	for _, i := range objs {
-		xrefStreams = append(xrefStreams, fmt.Sprintf("%d", i))
-	}
-
-	return len(xrefStreams), strings.Join(xrefStreams, ",")
-}
-
 // LogStats logs stats for read file.
 func (rc *ReadContext) LogStats(optimized bool) {
 	if !log.StatsEnabled() {
@@ -302,7 +278,7 @@ func (rc *ReadContext) ReadFileSize() int {
 	return int(rc.FileSize)
 }
 
-// OptimizationContext represents the context for the optimiziation of a PDF file.
+// OptimizationContext represents the context for the optimization of a PDF file.
 type OptimizationContext struct {
 
 	// Font section
@@ -314,10 +290,10 @@ type OptimizationContext struct {
 	DuplicateFontObjs types.IntSet        // The set of objects that represents the union of the object graphs of all duplicate font dicts.
 
 	// Image section
-	PageImages         []types.IntSet            // For each page a registry of image object numbers.
-	ImageObjects       map[int]*ImageObject      // ImageObject lookup table by image object number.
-	DuplicateImages    map[int]*types.StreamDict // Registry of duplicate image dicts.
-	DuplicateImageObjs types.IntSet              // The set of objects that represents the union of the object graphs of all duplicate image dicts.
+	PageImages         []types.IntSet                // For each page a registry of image object numbers.
+	ImageObjects       map[int]*ImageObject          // ImageObject lookup table by image object number.
+	DuplicateImages    map[int]*DuplicateImageObject // Registry of duplicate image dicts.
+	DuplicateImageObjs types.IntSet                  // The set of objects that represents the union of the object graphs of all duplicate image dicts.
 
 	ContentStreamCache map[int]*types.StreamDict
 	FormStreamCache    map[int]*types.StreamDict
@@ -337,7 +313,7 @@ func newOptimizationContext() *OptimizationContext {
 		DuplicateFonts:       map[int]types.Dict{},
 		DuplicateFontObjs:    types.IntSet{},
 		ImageObjects:         map[int]*ImageObject{},
-		DuplicateImages:      map[int]*types.StreamDict{},
+		DuplicateImages:      map[int]*DuplicateImageObject{},
 		DuplicateImageObjs:   types.IntSet{},
 		DuplicateInfoObjects: types.IntSet{},
 		ContentStreamCache:   map[int]*types.StreamDict{},
@@ -544,7 +520,10 @@ func (oc *OptimizationContext) collectImageInfo(logStr []string) []string {
 
 		for _, objectNumber := range objectNumbers {
 			imageObject := oc.ImageObjects[objectNumber]
-			logStr = append(logStr, fmt.Sprintf("#%-6d %s\n", objectNumber, imageObject.ResourceNamesString()))
+			resName, ok := imageObject.ResourceNames[i]
+			if ok {
+				logStr = append(logStr, fmt.Sprintf("#%-6d %s\n", objectNumber, resName))
+			}
 		}
 	}
 

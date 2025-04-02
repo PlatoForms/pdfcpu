@@ -21,7 +21,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/log"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
@@ -29,19 +28,23 @@ import (
 	"github.com/pkg/errors"
 )
 
-// appendTo appends inFile to ctxDest's page tree.
-func appendTo(rs io.ReadSeeker, fName string, ctxDest *model.Context) error {
-	ctxSource, _, _, err := readAndValidate(rs, ctxDest.Configuration, time.Now())
+// appendTo appends rs to ctxDest's page tree.
+func appendTo(rs io.ReadSeeker, fName string, ctxDest *model.Context, dividerPage bool) error {
+	ctxSource, err := ReadAndValidate(rs, ctxDest.Configuration)
 	if err != nil {
 		return err
 	}
 
+	if ctxDest.XRefTable.Version() < model.V20 && ctxSource.XRefTable.Version() == model.V20 {
+		return pdfcpu.ErrUnsupportedVersion
+	}
+
 	// Merge source context into dest context.
-	return pdfcpu.MergeXRefTables(fName, ctxSource, ctxDest)
+	return pdfcpu.MergeXRefTables(fName, ctxSource, ctxDest, false, dividerPage)
 }
 
 // MergeRaw merges a sequence of PDF streams and writes the result to w.
-func MergeRaw(rsc []io.ReadSeeker, w io.Writer, conf *model.Configuration) error {
+func MergeRaw(rsc []io.ReadSeeker, w io.Writer, dividerPage bool, conf *model.Configuration) error {
 	if rsc == nil {
 		return errors.New("pdfcpu: MergeRaw: missing rsc")
 	}
@@ -57,7 +60,7 @@ func MergeRaw(rsc []io.ReadSeeker, w io.Writer, conf *model.Configuration) error
 	conf.ValidationMode = model.ValidationRelaxed
 	conf.CreateBookmarks = false
 
-	ctxDest, _, _, err := readAndValidate(rsc[0], conf, time.Now())
+	ctxDest, err := ReadAndValidate(rsc[0], conf)
 	if err != nil {
 		return err
 	}
@@ -65,20 +68,22 @@ func MergeRaw(rsc []io.ReadSeeker, w io.Writer, conf *model.Configuration) error
 	ctxDest.EnsureVersionForWriting()
 
 	for i, f := range rsc[1:] {
-		if err = appendTo(f, strconv.Itoa(i), ctxDest); err != nil {
+		if err = appendTo(f, strconv.Itoa(i), ctxDest, dividerPage); err != nil {
 			return err
 		}
 	}
 
-	if err = OptimizeContext(ctxDest); err != nil {
-		return err
+	if conf.OptimizeBeforeWriting {
+		if err = OptimizeContext(ctxDest); err != nil {
+			return err
+		}
 	}
 
 	return WriteContext(ctxDest, w)
 }
 
 func prepDestContext(destFile string, rs io.ReadSeeker, conf *model.Configuration) (*model.Context, error) {
-	ctxDest, _, _, err := readAndValidate(rs, conf, time.Now())
+	ctxDest, err := ReadAndValidate(rs, conf)
 	if err != nil {
 		return nil, err
 	}
@@ -89,12 +94,30 @@ func prepDestContext(destFile string, rs io.ReadSeeker, conf *model.Configuratio
 		}
 	}
 
-	ctxDest.EnsureVersionForWriting()
+	if ctxDest.XRefTable.Version() < model.V20 {
+		ctxDest.EnsureVersionForWriting()
+	}
 
 	return ctxDest, nil
 }
 
-func Merge(destFile string, inFiles []string, w io.Writer, conf *model.Configuration) error {
+func appendFile(fName string, ctxDest *model.Context, dividerPage bool) error {
+	f, err := os.Open(fName)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	if log.CLIEnabled() {
+		log.CLI.Println(fName)
+	}
+	return appendTo(f, filepath.Base(fName), ctxDest, dividerPage)
+}
+
+// Merge concatenates inFiles.
+// if destFile is supplied it appends the result to destfile (=MERGEAPPEND)
+// if no destFile supplied it writes the result to the first entry of inFiles (=MERGECREATE).
+func Merge(destFile string, inFiles []string, w io.Writer, conf *model.Configuration, dividerPage bool) error {
 	if w == nil {
 		return errors.New("pdfcpu: Merge: Please provide w")
 	}
@@ -107,10 +130,13 @@ func Merge(destFile string, inFiles []string, w io.Writer, conf *model.Configura
 
 	if destFile != "" {
 		conf.Cmd = model.MERGEAPPEND
-	}
-	if destFile == "" {
+	} else {
 		destFile = inFiles[0]
 		inFiles = inFiles[1:]
+	}
+
+	if conf.CreateBookmarks && log.CLIEnabled() {
+		log.CLI.Println("creating bookmarks...")
 	}
 
 	f, err := os.Open(destFile)
@@ -131,52 +157,46 @@ func Merge(destFile string, inFiles []string, w io.Writer, conf *model.Configura
 	}
 
 	for _, fName := range inFiles {
-		if err := func() error {
-			f, err := os.Open(fName)
-			if err != nil {
-				return err
-			}
-			defer f.Close()
-
-			if log.CLIEnabled() {
-				log.CLI.Println(fName)
-			}
-			if err = appendTo(f, filepath.Base(fName), ctxDest); err != nil {
-				return err
-			}
-
-			return nil
-
-		}(); err != nil {
+		if err := appendFile(fName, ctxDest, dividerPage); err != nil {
 			return err
 		}
 	}
 
-	if err := OptimizeContext(ctxDest); err != nil {
-		return err
+	if conf.OptimizeBeforeWriting {
+		if err := OptimizeContext(ctxDest); err != nil {
+			return err
+		}
 	}
 
 	return WriteContext(ctxDest, w)
 }
 
-func MergeCreateFile(inFiles []string, outFile string, conf *model.Configuration) (err error) {
+// MergeCreateFile merges inFiles and writes the result to outFile.
+func MergeCreateFile(inFiles []string, outFile string, dividerPage bool, conf *model.Configuration) (err error) {
 	f, err := os.Create(outFile)
 	if err != nil {
 		return err
 	}
 
 	defer func() {
-		cerr := f.Close()
-		if err == nil {
-			err = cerr
+		if err != nil {
+			if err1 := f.Close(); err1 != nil {
+				return
+			}
+			os.Remove(outFile)
+			return
+		}
+		if err = f.Close(); err != nil {
+			return
 		}
 	}()
 
 	logWritingTo(outFile)
-	return Merge("", inFiles, f, conf)
+	return Merge("", inFiles, f, conf, dividerPage)
 }
 
-func MergeAppendFile(inFiles []string, outFile string, conf *model.Configuration) (err error) {
+// MergeAppendFile appends inFiles to outFile.
+func MergeAppendFile(inFiles []string, outFile string, dividerPage bool, conf *model.Configuration) (err error) {
 	tmpFile := outFile
 	overWrite := false
 	destFile := ""
@@ -202,9 +222,7 @@ func MergeAppendFile(inFiles []string, outFile string, conf *model.Configuration
 			if err1 := f.Close(); err1 != nil {
 				return
 			}
-			if overWrite {
-				os.Remove(tmpFile)
-			}
+			os.Remove(tmpFile)
 			return
 		}
 		if err = f.Close(); err != nil {
@@ -215,6 +233,88 @@ func MergeAppendFile(inFiles []string, outFile string, conf *model.Configuration
 		}
 	}()
 
-	err = Merge(destFile, inFiles, f, conf)
+	err = Merge(destFile, inFiles, f, conf, dividerPage)
+	return err
+}
+
+// MergeCreateZip zips rs1 and rs2 into w.
+func MergeCreateZip(rs1, rs2 io.ReadSeeker, w io.Writer, conf *model.Configuration) error {
+	if rs1 == nil {
+		return errors.New("pdfcpu: MergeCreateZip: missing rs1")
+	}
+	if rs2 == nil {
+		return errors.New("pdfcpu: MergeCreateZip: missing rs2")
+	}
+	if w == nil {
+		return errors.New("pdfcpu: MergeCreateZip: missing w")
+	}
+
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.MERGECREATEZIP
+	conf.ValidationMode = model.ValidationRelaxed
+
+	ctxDest, err := ReadAndValidate(rs1, conf)
+	if err != nil {
+		return err
+	}
+	if ctxDest.XRefTable.Version() == model.V20 {
+		return pdfcpu.ErrUnsupportedVersion
+	}
+	ctxDest.EnsureVersionForWriting()
+
+	if _, err = pdfcpu.RemoveBookmarks(ctxDest); err != nil {
+		return err
+	}
+
+	ctxSrc, err := ReadAndValidate(rs2, conf)
+	if err != nil {
+		return err
+	}
+	if ctxSrc.XRefTable.Version() == model.V20 {
+		return pdfcpu.ErrUnsupportedVersion
+	}
+
+	if err := pdfcpu.MergeXRefTables("", ctxSrc, ctxDest, true, false); err != nil {
+		return err
+	}
+
+	if conf.OptimizeBeforeWriting {
+		if err := OptimizeContext(ctxDest); err != nil {
+			return err
+		}
+	}
+
+	return WriteContext(ctxDest, w)
+}
+
+// MergeCreateZipFile zips inFile1 and inFile2 into outFile.
+func MergeCreateZipFile(inFile1, inFile2, outFile string, conf *model.Configuration) (err error) {
+	f1, err := os.Open(inFile1)
+	if err != nil {
+		return err
+	}
+
+	f2, err := os.Open(inFile2)
+	if err != nil {
+		return err
+	}
+
+	f, err := os.Create(outFile)
+	if err != nil {
+		return err
+	}
+
+	defer func() {
+		cerr := f.Close()
+		if err == nil {
+			err = cerr
+		}
+	}()
+
+	logWritingTo(outFile)
+
+	err = MergeCreateZip(f1, f2, f, conf)
 	return err
 }

@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/log"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pkg/errors"
 )
@@ -37,10 +38,6 @@ func Validate(rs io.ReadSeeker, conf *model.Configuration) error {
 		conf = model.NewDefaultConfiguration()
 	}
 	conf.Cmd = model.VALIDATE
-
-	if conf.ValidationMode == model.ValidationNone {
-		return errors.New("pdfcpu: validate: mode ValidationNone not allowed")
-	}
 
 	from1 := time.Now()
 
@@ -58,6 +55,15 @@ func Validate(rs io.ReadSeeker, conf *model.Configuration) error {
 			s = " (try -mode=relaxed)"
 		}
 		err = errors.Wrap(err, fmt.Sprintf("validation error (obj#:%d)%s", ctx.CurObj, s))
+	}
+
+	if err == nil {
+		if conf.Optimize {
+			if log.CLIEnabled() {
+				log.CLI.Println("optimizing...")
+			}
+			err = pdfcpu.OptimizeXRefTable(ctx)
+		}
 	}
 
 	dur2 := time.Since(from2).Seconds()
@@ -81,10 +87,6 @@ func Validate(rs io.ReadSeeker, conf *model.Configuration) error {
 func ValidateFile(inFile string, conf *model.Configuration) error {
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
-	}
-
-	if conf != nil && conf.ValidationMode == model.ValidationNone {
-		return nil
 	}
 
 	log.CLI.Printf("validating(mode=%s) %s ...\n", conf.ValidationModeString(), inFile)
@@ -111,10 +113,6 @@ func ValidateFiles(inFiles []string, conf *model.Configuration) error {
 		conf = model.NewDefaultConfiguration()
 	}
 
-	if conf != nil && conf.ValidationMode == model.ValidationNone {
-		return nil
-	}
-
 	for i, fn := range inFiles {
 		if i > 0 {
 			log.CLI.Println()
@@ -131,7 +129,7 @@ func ValidateFiles(inFiles []string, conf *model.Configuration) error {
 }
 
 // DumpObject writes an object from rs to stdout.
-func DumpObject(rs io.ReadSeeker, objNr int, hex bool, conf *model.Configuration) error {
+func DumpObject(rs io.ReadSeeker, mode, objNr int, conf *model.Configuration) error {
 	if rs == nil {
 		return errors.New("pdfcpu: DumpObject: missing rs")
 	}
@@ -154,13 +152,13 @@ func DumpObject(rs io.ReadSeeker, objNr int, hex bool, conf *model.Configuration
 		return errors.Wrap(err, fmt.Sprintf("validation error (obj#:%d)%s", ctx.CurObj, s))
 	}
 
-	ctx.DumpStream(objNr, hex)
+	ctx.DumpObject(objNr, mode)
 
 	return err
 }
 
 // DumpObjectFile writes an object from rs to stdout.
-func DumpObjectFile(inFile string, objNr int, hex bool, conf *model.Configuration) error {
+func DumpObjectFile(inFile string, mode, objNr int, conf *model.Configuration) error {
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	}
@@ -172,5 +170,5 @@ func DumpObjectFile(inFile string, objNr int, hex bool, conf *model.Configuratio
 
 	defer f.Close()
 
-	return DumpObject(f, objNr, hex, conf)
+	return DumpObject(f, mode, objNr, conf)
 }

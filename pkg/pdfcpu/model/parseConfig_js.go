@@ -28,6 +28,16 @@ import (
 
 // This gets rid of the gopkg.in/yaml.v2 dependency for wasm builds.
 
+func handleCreationDate(v string, c *Configuration) error {
+	c.CreationDate = v
+	return nil
+}
+
+func handleVersion(v string, c *Configuration) error {
+	c.Version = v
+	return nil
+}
+
 func handleCheckFileNameExt(k, v string, c *Configuration) error {
 	v = strings.ToLower(v)
 	if v != "true" && v != "false" {
@@ -55,6 +65,15 @@ func handleConfDecodeAllStreams(k, v string, c *Configuration) error {
 	return nil
 }
 
+func handleConfPostProcessValidate(k, v string, c *Configuration) error {
+	v = strings.ToLower(v)
+	if v != "true" && v != "false" {
+		return errors.Errorf("config key %s is boolean", k)
+	}
+	c.PostProcessValidate = v == "true"
+	return nil
+}
+
 func handleConfValidationMode(v string, c *Configuration) error {
 	v1 := strings.ToLower(v)
 	switch v1 {
@@ -62,8 +81,6 @@ func handleConfValidationMode(v string, c *Configuration) error {
 		c.ValidationMode = ValidationStrict
 	case "validationrelaxed":
 		c.ValidationMode = ValidationRelaxed
-	case "validationone":
-		c.ValidationMode = ValidationNone
 	default:
 		return errors.Errorf("invalid validationMode: %s", v)
 	}
@@ -124,12 +141,21 @@ func handleConfEncryptKeyLength(v string, c *Configuration) error {
 	return nil
 }
 
+func handleTimeout(v string, c *Configuration) error {
+	i, err := strconv.Atoi(v)
+	if err != nil {
+		return errors.Errorf("timeout is numeric > 0, got: %s", v)
+	}
+	c.Timeout = i
+	return nil
+}
+
 func handleConfPermissions(v string, c *Configuration) error {
 	i, err := strconv.Atoi(v)
 	if err != nil {
 		return errors.Errorf("permissions is numeric, got: %s", v)
 	}
-	c.Permissions = int16(i)
+	c.Permissions = PermissionFlags(i)
 	return nil
 }
 
@@ -160,38 +186,22 @@ func handleDateFormat(v string, c *Configuration) error {
 	return nil
 }
 
-func handleHeaderBufSize(k, v string, c *Configuration) error {
-	i, err := strconv.Atoi(v)
-	if err != nil {
-		return errors.Errorf("%s is numeric, got: %s", k, v)
-	}
-	if i < 100 {
-		return errors.Errorf("%s must be >= 100, got: %d", k, i)
-	}
-	c.HeaderBufSize = i
-	return nil
-}
-
-func handleOptimizeDuplicateContentStreams(k, v string, c *Configuration) error {
+func boolean(k, v string) (bool, error) {
 	v = strings.ToLower(v)
 	if v != "true" && v != "false" {
-		return errors.Errorf("config key %s is boolean", k)
+		return false, errors.Errorf("config key %s is boolean", k)
 	}
-	c.OptimizeDuplicateContentStreams = v == "true"
-	return nil
-}
-
-func handleCreateBookmarks(k, v string, c *Configuration) error {
-	v = strings.ToLower(v)
-	if v != "true" && v != "false" {
-		return errors.Errorf("config key %s is boolean", k)
-	}
-	c.CreateBookmarks = v == "true"
-	return nil
+	return v == "true", nil
 }
 
 func parseKeysPart1(k, v string, c *Configuration) (bool, error) {
 	switch k {
+
+	case "created":
+		return true, handleCreationDate(v, c)
+
+	case "version":
+		return true, handleVersion(v, c)
 
 	case "checkFileNameExt":
 		return true, handleCheckFileNameExt(k, v, c)
@@ -205,6 +215,9 @@ func parseKeysPart1(k, v string, c *Configuration) (bool, error) {
 	case "validationMode":
 		return true, handleConfValidationMode(v, c)
 
+	case "postProcessValidate":
+		return true, handleConfPostProcessValidate(k, v, c)
+
 	case "eol":
 		return true, handleConfEol(v, c)
 
@@ -213,44 +226,55 @@ func parseKeysPart1(k, v string, c *Configuration) (bool, error) {
 
 	case "writeXRefStream":
 		return true, handleConfWriteXRefStream(k, v, c)
-
 	}
 
 	return false, nil
 }
 
-func parseKeysPart2(k, v string, c *Configuration) error {
+func parseKeysPart2(k, v string, c *Configuration) (err error) {
 	switch k {
 
 	case "encryptUsingAES":
-		return handleConfEncryptUsingAES(k, v, c)
+		err = handleConfEncryptUsingAES(k, v, c)
 
 	case "encryptKeyLength":
-		return handleConfEncryptKeyLength(v, c)
+		err = handleConfEncryptKeyLength(v, c)
 
 	case "permissions":
-		return handleConfPermissions(v, c)
+		err = handleConfPermissions(v, c)
 
 	case "unit", "units":
-		return handleConfUnit(v, c)
+		err = handleConfUnit(v, c)
 
 	case "timestampFormat":
-		return handleTimestampFormat(v, c)
+		err = handleTimestampFormat(v, c)
 
 	case "dateFormat":
-		return handleDateFormat(v, c)
+		err = handleDateFormat(v, c)
 
-	case "headerBufSize":
-		return handleHeaderBufSize(k, v, c)
+	case "optimize":
+		c.Optimize, err = boolean(k, v)
+
+	case "optimizeResourceDicts":
+		c.OptimizeResourceDicts, err = boolean(k, v)
 
 	case "optimizeDuplicateContentStreams":
-		return handleOptimizeDuplicateContentStreams(k, v, c)
+		c.OptimizeDuplicateContentStreams, err = boolean(k, v)
 
 	case "createBookmarks":
-		return handleCreateBookmarks(k, v, c)
+		c.CreateBookmarks, err = boolean(k, v)
+
+	case "needAppearances":
+		c.NeedAppearances, err = boolean(k, v)
+
+	case "offline":
+		c.Offline, err = boolean(k, v)
+
+	case "timeout":
+		handleTimeout(v, c)
 	}
 
-	return nil
+	return err
 }
 
 func parseKeyValue(k, v string, c *Configuration) error {
@@ -268,6 +292,9 @@ func parseConfigFile(r io.Reader, configPath string) error {
 	//fmt.Println("parseConfigFile For JS")
 	var conf Configuration
 	conf.Path = configPath
+
+	// TODO add to config.yml
+	conf.OptimizeBeforeWriting = true
 
 	s := bufio.NewScanner(r)
 	for s.Scan() {

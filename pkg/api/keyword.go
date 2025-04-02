@@ -19,7 +19,6 @@ package api
 import (
 	"io"
 	"os"
-	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
@@ -35,20 +34,19 @@ func Keywords(rs io.ReadSeeker, conf *model.Configuration) ([]string, error) {
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	} else {
-		// Validation loads infodict.
 		conf.ValidationMode = model.ValidationRelaxed
 	}
 	conf.Cmd = model.LISTKEYWORDS
 
-	ctx, _, _, _, err := ReadValidateAndOptimize(rs, conf, time.Now())
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
 		return nil, err
 	}
 
-	return pdfcpu.KeywordsList(ctx.XRefTable)
+	return pdfcpu.KeywordsList(ctx)
 }
 
-// AddKeywords embeds files into a PDF context read from rs and writes the result to w.
+// AddKeywords adds keywords to rs's infodict and writes the result to w.
 func AddKeywords(rs io.ReadSeeker, w io.Writer, files []string, conf *model.Configuration) error {
 	if rs == nil {
 		return errors.New("pdfcpu: AddKeywords: missing rs")
@@ -57,38 +55,23 @@ func AddKeywords(rs io.ReadSeeker, w io.Writer, files []string, conf *model.Conf
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	} else {
-		// Validation loads infodict.
 		conf.ValidationMode = model.ValidationRelaxed
 	}
 	conf.Cmd = model.ADDKEYWORDS
 
-	fromStart := time.Now()
-	ctx, durRead, durVal, durOpt, err := ReadValidateAndOptimize(rs, conf, fromStart)
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
 		return err
 	}
 
-	from := time.Now()
-
-	if err = pdfcpu.KeywordsAdd(ctx.XRefTable, files); err != nil {
+	if err = pdfcpu.KeywordsAdd(ctx, files); err != nil {
 		return err
 	}
 
-	durAdd := time.Since(from).Seconds()
-	fromWrite := time.Now()
-
-	if err = WriteContext(ctx, w); err != nil {
-		return err
-	}
-
-	durWrite := durAdd + time.Since(fromWrite).Seconds()
-	durTotal := time.Since(fromStart).Seconds()
-	logOperationStats(ctx, "add keyword, write", durRead, durVal, durOpt, durWrite, durTotal)
-
-	return nil
+	return Write(ctx, w, conf)
 }
 
-// AddKeywordsFile embeds files into a PDF context read from inFile and writes the result to outFile.
+// AddKeywordsFile adds keywords to inFile's infodict and writes the result to outFile.
 func AddKeywordsFile(inFile, outFile string, files []string, conf *model.Configuration) (err error) {
 	var f1, f2 *os.File
 
@@ -109,9 +92,7 @@ func AddKeywordsFile(inFile, outFile string, files []string, conf *model.Configu
 		if err != nil {
 			f2.Close()
 			f1.Close()
-			if outFile == "" || inFile == outFile {
-				os.Remove(tmpFile)
-			}
+			os.Remove(tmpFile)
 			return
 		}
 		if err = f2.Close(); err != nil {
@@ -128,7 +109,7 @@ func AddKeywordsFile(inFile, outFile string, files []string, conf *model.Configu
 	return AddKeywords(f1, f2, files, conf)
 }
 
-// RemoveKeywords deletes embedded files from a PDF context read from rs and writes the result to w.
+// RemoveKeywords deletes keywords from rs's infodict and writes the result to w.
 func RemoveKeywords(rs io.ReadSeeker, w io.Writer, keywords []string, conf *model.Configuration) error {
 	if rs == nil {
 		return errors.New("pdfcpu: RemoveKeywords: missing rs")
@@ -137,41 +118,27 @@ func RemoveKeywords(rs io.ReadSeeker, w io.Writer, keywords []string, conf *mode
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	} else {
-		// Validation loads infodict.
 		conf.ValidationMode = model.ValidationRelaxed
 	}
 	conf.Cmd = model.REMOVEKEYWORDS
 
-	fromStart := time.Now()
-	ctx, durRead, durVal, durOpt, err := ReadValidateAndOptimize(rs, conf, fromStart)
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
 		return err
 	}
 
-	from := time.Now()
-
 	var ok bool
-	if ok, err = pdfcpu.KeywordsRemove(ctx.XRefTable, keywords); err != nil {
+	if ok, err = pdfcpu.KeywordsRemove(ctx, keywords); err != nil {
 		return err
 	}
 	if !ok {
 		return errors.New("no keyword removed")
 	}
 
-	durRemove := time.Since(from).Seconds()
-	fromWrite := time.Now()
-	if err = WriteContext(ctx, w); err != nil {
-		return err
-	}
-
-	durWrite := durRemove + time.Since(fromWrite).Seconds()
-	durTotal := time.Since(fromStart).Seconds()
-	logOperationStats(ctx, "remove att, write", durRead, durVal, durOpt, durWrite, durTotal)
-
-	return nil
+	return Write(ctx, w, conf)
 }
 
-// RemoveKeywordsFile deletes embedded files from a PDF context read from inFile and writes the result to outFile.
+// RemoveKeywordsFile deletes keywords from inFile's infodict and writes the result to outFile.
 func RemoveKeywordsFile(inFile, outFile string, keywords []string, conf *model.Configuration) (err error) {
 	var f1, f2 *os.File
 
@@ -192,9 +159,7 @@ func RemoveKeywordsFile(inFile, outFile string, keywords []string, conf *model.C
 		if err != nil {
 			f2.Close()
 			f1.Close()
-			if outFile == "" || inFile == outFile {
-				os.Remove(tmpFile)
-			}
+			os.Remove(tmpFile)
 			return
 		}
 		if err = f2.Close(); err != nil {

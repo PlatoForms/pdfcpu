@@ -234,7 +234,7 @@ func (cb *CheckBox) ensureZapfDingbats(fonts model.FontMap) (*types.IndirectRef,
 		if font.Res.IndRef != nil {
 			return font.Res.IndRef, nil
 		}
-		ir, err := pdffont.EnsureFontDict(pdf.XRefTable, fontName, "", "", false, false, nil)
+		ir, err := pdffont.EnsureFontDict(pdf.XRefTable, fontName, "", "", false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -261,9 +261,7 @@ func (cb *CheckBox) ensureZapfDingbats(fonts model.FontMap) (*types.IndirectRef,
 
 		if indRef == nil {
 			for objNr, fo := range pdf.Optimize.FontObjects {
-				//fmt.Printf("searching for %s - obj:%d fontName:%s prefix:%s\n", fontName, objNr, fo.FontName, fo.Prefix)
 				if fontName == fo.FontName {
-					//fmt.Println("Match!")
 					indRef = types.NewIndirectRef(objNr, 0)
 					break
 				}
@@ -272,7 +270,7 @@ func (cb *CheckBox) ensureZapfDingbats(fonts model.FontMap) (*types.IndirectRef,
 	}
 
 	if indRef == nil {
-		indRef, err = pdffont.EnsureFontDict(pdf.XRefTable, fontName, "", "", false, false, nil)
+		indRef, err = pdffont.EnsureFontDict(pdf.XRefTable, fontName, "", "", false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -535,7 +533,7 @@ func (cb *CheckBox) appearanceIndRefs(fonts model.FontMap, bgCol *color.SimpleCo
 
 func (cb *CheckBox) prepareDict(fonts model.FontMap) (types.Dict, error) {
 
-	id, err := types.EscapeUTF16String(cb.ID)
+	id, err := types.EscapedUTF16String(cb.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -597,7 +595,7 @@ func (cb *CheckBox) prepareDict(fonts model.FontMap) (types.Dict, error) {
 	)
 
 	if cb.Tip != "" {
-		tu, err := types.EscapeUTF16String(cb.Tip)
+		tu, err := types.EscapedUTF16String(cb.Tip)
 		if err != nil {
 			return nil, err
 		}
@@ -675,6 +673,7 @@ func (cb *CheckBox) prepLabel(p *model.Page, pageNr int, fonts model.FontMap) er
 	td := model.TextDescriptor{
 		Text:     v,
 		FontName: fontName,
+		Embed:    true,
 		FontKey:  id,
 		FontSize: f.Size,
 		Scale:    1.,

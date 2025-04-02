@@ -19,7 +19,6 @@ package api
 import (
 	"io"
 	"os"
-	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/log"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
@@ -42,6 +41,7 @@ func Box(s string, u types.DisplayUnit) (*model.Box, error) {
 	return model.ParseBox(s, u)
 }
 
+// Boxes returns rs's page boundaries for selected pages of rs.
 func Boxes(rs io.ReadSeeker, selectedPages []string, conf *model.Configuration) ([]model.PageBoundaries, error) {
 	if rs == nil {
 		return nil, errors.New("pdfcpu: Boxes: missing rs")
@@ -52,12 +52,8 @@ func Boxes(rs io.ReadSeeker, selectedPages []string, conf *model.Configuration) 
 	}
 	conf.Cmd = model.LISTBOXES
 
-	ctx, _, _, _, err := ReadValidateAndOptimize(rs, conf, time.Now())
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
-		return nil, err
-	}
-
-	if err := ctx.EnsurePageCount(); err != nil {
 		return nil, err
 	}
 
@@ -65,9 +61,6 @@ func Boxes(rs io.ReadSeeker, selectedPages []string, conf *model.Configuration) 
 	if err != nil {
 		return nil, err
 	}
-
-	//pb := &model.PageBoundaries{}
-	//pb.SelectAll()
 
 	return ctx.PageBoundaries(pages)
 }
@@ -83,12 +76,8 @@ func AddBoxes(rs io.ReadSeeker, w io.Writer, selectedPages []string, pb *model.P
 	}
 	conf.Cmd = model.ADDBOXES
 
-	ctx, _, _, _, err := ReadValidateAndOptimize(rs, conf, time.Now())
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
-		return err
-	}
-
-	if err := ctx.EnsurePageCount(); err != nil {
 		return err
 	}
 
@@ -101,19 +90,18 @@ func AddBoxes(rs io.ReadSeeker, w io.Writer, selectedPages []string, pb *model.P
 		return err
 	}
 
-	if conf.ValidationMode != model.ValidationNone {
-		if err = ValidateContext(ctx); err != nil {
-			return err
-		}
-	}
-
-	return WriteContext(ctx, w)
+	return Write(ctx, w, conf)
 }
 
 // AddBoxesFile adds page boundaries for selected pages of inFile and writes result to outFile.
-func AddBoxesFile(inFile, outFile string, selectedPages []string, pb *model.PageBoundaries, conf *model.Configuration) error {
+func AddBoxesFile(inFile, outFile string, selectedPages []string, pb *model.PageBoundaries, conf *model.Configuration) (err error) {
+	var f1, f2 *os.File
 	if log.CLIEnabled() {
 		log.CLI.Printf("adding %s for %s\n", pb, inFile)
+	}
+
+	if f1, err = os.Open(inFile); err != nil {
+		return err
 	}
 
 	tmpFile := inFile + ".tmp"
@@ -122,15 +110,6 @@ func AddBoxesFile(inFile, outFile string, selectedPages []string, pb *model.Page
 		logWritingTo(outFile)
 	} else {
 		logWritingTo(inFile)
-	}
-
-	var (
-		f1, f2 *os.File
-		err    error
-	)
-
-	if f1, err = os.Open(inFile); err != nil {
-		return err
 	}
 
 	if f2, err = os.Create(tmpFile); err != nil {
@@ -142,9 +121,7 @@ func AddBoxesFile(inFile, outFile string, selectedPages []string, pb *model.Page
 		if err != nil {
 			f2.Close()
 			f1.Close()
-			if outFile == "" || inFile == outFile {
-				os.Remove(tmpFile)
-			}
+			os.Remove(tmpFile)
 			return
 		}
 		if err = f2.Close(); err != nil {
@@ -172,12 +149,8 @@ func RemoveBoxes(rs io.ReadSeeker, w io.Writer, selectedPages []string, pb *mode
 	}
 	conf.Cmd = model.REMOVEBOXES
 
-	ctx, _, _, _, err := ReadValidateAndOptimize(rs, conf, time.Now())
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
-		return err
-	}
-
-	if err := ctx.EnsurePageCount(); err != nil {
 		return err
 	}
 
@@ -190,19 +163,19 @@ func RemoveBoxes(rs io.ReadSeeker, w io.Writer, selectedPages []string, pb *mode
 		return err
 	}
 
-	if conf.ValidationMode != model.ValidationNone {
-		if err = ValidateContext(ctx); err != nil {
-			return err
-		}
-	}
-
-	return WriteContext(ctx, w)
+	return Write(ctx, w, conf)
 }
 
 // RemoveBoxesFile removes page boundaries as specified in pb for selected pages of inFile and writes result to outFile.
-func RemoveBoxesFile(inFile, outFile string, selectedPages []string, pb *model.PageBoundaries, conf *model.Configuration) error {
+func RemoveBoxesFile(inFile, outFile string, selectedPages []string, pb *model.PageBoundaries, conf *model.Configuration) (err error) {
+	var f1, f2 *os.File
+
 	if log.CLIEnabled() {
 		log.CLI.Printf("removing %s for %s\n", pb, inFile)
+	}
+
+	if f1, err = os.Open(inFile); err != nil {
+		return err
 	}
 
 	tmpFile := inFile + ".tmp"
@@ -211,15 +184,6 @@ func RemoveBoxesFile(inFile, outFile string, selectedPages []string, pb *model.P
 		logWritingTo(outFile)
 	} else {
 		logWritingTo(inFile)
-	}
-
-	var (
-		f1, f2 *os.File
-		err    error
-	)
-
-	if f1, err = os.Open(inFile); err != nil {
-		return err
 	}
 
 	if f2, err = os.Create(tmpFile); err != nil {
@@ -231,9 +195,7 @@ func RemoveBoxesFile(inFile, outFile string, selectedPages []string, pb *model.P
 		if err != nil {
 			f2.Close()
 			f1.Close()
-			if outFile == "" || inFile == outFile {
-				os.Remove(tmpFile)
-			}
+			os.Remove(tmpFile)
 			return
 		}
 		if err = f2.Close(); err != nil {
@@ -261,12 +223,8 @@ func Crop(rs io.ReadSeeker, w io.Writer, selectedPages []string, b *model.Box, c
 	}
 	conf.Cmd = model.CROP
 
-	ctx, _, _, _, err := ReadValidateAndOptimize(rs, conf, time.Now())
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
-		return err
-	}
-
-	if err := ctx.EnsurePageCount(); err != nil {
 		return err
 	}
 
@@ -279,19 +237,19 @@ func Crop(rs io.ReadSeeker, w io.Writer, selectedPages []string, b *model.Box, c
 		return err
 	}
 
-	if conf.ValidationMode != model.ValidationNone {
-		if err = ValidateContext(ctx); err != nil {
-			return err
-		}
-	}
-
-	return WriteContext(ctx, w)
+	return Write(ctx, w, conf)
 }
 
 // CropFile adds crop boxes for selected pages of inFile and writes result to outFile.
-func CropFile(inFile, outFile string, selectedPages []string, b *model.Box, conf *model.Configuration) error {
+func CropFile(inFile, outFile string, selectedPages []string, b *model.Box, conf *model.Configuration) (err error) {
+	var f1, f2 *os.File
+
 	if log.CLIEnabled() {
 		log.CLI.Printf("cropping %s\n", inFile)
+	}
+
+	if f1, err = os.Open(inFile); err != nil {
+		return err
 	}
 
 	tmpFile := inFile + ".tmp"
@@ -300,15 +258,6 @@ func CropFile(inFile, outFile string, selectedPages []string, b *model.Box, conf
 		logWritingTo(outFile)
 	} else {
 		logWritingTo(inFile)
-	}
-
-	var (
-		f1, f2 *os.File
-		err    error
-	)
-
-	if f1, err = os.Open(inFile); err != nil {
-		return err
 	}
 
 	if f2, err = os.Create(tmpFile); err != nil {
@@ -320,9 +269,7 @@ func CropFile(inFile, outFile string, selectedPages []string, b *model.Box, conf
 		if err != nil {
 			f2.Close()
 			f1.Close()
-			if outFile == "" || inFile == outFile {
-				os.Remove(tmpFile)
-			}
+			os.Remove(tmpFile)
 			return
 		}
 		if err = f2.Close(); err != nil {
@@ -335,6 +282,11 @@ func CropFile(inFile, outFile string, selectedPages []string, b *model.Box, conf
 			err = os.Rename(tmpFile, inFile)
 		}
 	}()
+
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.CROP
 
 	return Crop(f1, f2, selectedPages, b, conf)
 }

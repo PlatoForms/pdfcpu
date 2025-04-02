@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/log"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
@@ -33,23 +32,20 @@ import (
 )
 
 func prepareForCut(rs io.ReadSeeker, selectedPages []string, conf *model.Configuration) (*model.Context, types.IntSet, error) {
-	ctxSrc, _, _, _, err := ReadValidateAndOptimize(rs, conf, time.Now())
+	ctx, err := ReadValidateAndOptimize(rs, conf)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	if err := ctxSrc.EnsurePageCount(); err != nil {
-		return nil, nil, err
-	}
-
-	pages, err := PagesForPageSelection(ctxSrc.PageCount, selectedPages, true, true)
+	pages, err := PagesForPageSelection(ctx.PageCount, selectedPages, true, true)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	return ctxSrc, pages, nil
+	return ctx, pages, nil
 }
 
+// Poster applies cut for selected pages of rs and generates corresponding poster tiles in outDir.
 func Poster(rs io.ReadSeeker, outDir, fileName string, selectedPages []string, cut *model.Cut, conf *model.Configuration) error {
 	if rs == nil {
 		return errors.New("pdfcpu: Poster: missing rs")
@@ -94,14 +90,14 @@ func Poster(rs io.ReadSeeker, outDir, fileName string, selectedPages []string, c
 		outFile := filepath.Join(outDir, fmt.Sprintf("%s_page_%d.pdf", fileName, i))
 		logWritingTo(outFile)
 
-		if err := WriteContextFile(ctxDest, outFile); err != nil {
-			return err
-		}
-
-		if conf.ValidationMode != model.ValidationNone {
+		if conf.PostProcessValidate {
 			if err = ValidateContext(ctxDest); err != nil {
 				return err
 			}
+		}
+
+		if err := WriteContextFile(ctxDest, outFile); err != nil {
+			return err
 		}
 	}
 
@@ -125,6 +121,7 @@ func PosterFile(inFile, outDir, outFile string, selectedPages []string, cut *mod
 	return Poster(f, outDir, outFile, selectedPages, cut, conf)
 }
 
+// NDown applies n & cutConf for selected pages of rs and writes results to outDir.
 func NDown(rs io.ReadSeeker, outDir, fileName string, selectedPages []string, n int, cut *model.Cut, conf *model.Configuration) error {
 	if rs == nil {
 		return errors.New("pdfcpu NDown: Please provide rs")
@@ -156,18 +153,18 @@ func NDown(rs io.ReadSeeker, outDir, fileName string, selectedPages []string, n 
 			return err
 		}
 
+		if conf.PostProcessValidate {
+			if err = ValidateContext(ctxDest); err != nil {
+				return err
+			}
+		}
+
 		outFile := filepath.Join(outDir, fmt.Sprintf("%s_page_%d.pdf", fileName, i))
 		if log.CLIEnabled() {
 			log.CLI.Printf("writing %s\n", outFile)
 		}
 		if err := WriteContextFile(ctxDest, outFile); err != nil {
 			return err
-		}
-
-		if conf.ValidationMode != model.ValidationNone {
-			if err = ValidateContext(ctxDest); err != nil {
-				return err
-			}
 		}
 	}
 
@@ -218,6 +215,7 @@ func validateCut(cut *model.Cut) error {
 	return nil
 }
 
+// Cut applies cutConf for selected pages of rs and writes results to outDir.
 func Cut(rs io.ReadSeeker, outDir, fileName string, selectedPages []string, cut *model.Cut, conf *model.Configuration) error {
 	if rs == nil {
 		return errors.New("pdfcpu: Cut: missing rs")
@@ -259,17 +257,17 @@ func Cut(rs io.ReadSeeker, outDir, fileName string, selectedPages []string, cut 
 			return err
 		}
 
+		if conf.PostProcessValidate {
+			if err = ValidateContext(ctxDest); err != nil {
+				return err
+			}
+		}
+
 		outFile := filepath.Join(outDir, fmt.Sprintf("%s_page_%d.pdf", fileName, i))
 		logWritingTo(outFile)
 
 		if err := WriteContextFile(ctxDest, outFile); err != nil {
 			return err
-		}
-
-		if conf.ValidationMode != model.ValidationNone {
-			if err = ValidateContext(ctxDest); err != nil {
-				return err
-			}
 		}
 	}
 

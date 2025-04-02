@@ -391,6 +391,26 @@ func PagesForPageSelection(pageCount int, pageSelection []string, ensureAllforNo
 	return m, nil
 }
 
+func RemainingPagesForPageRemoval(pageCount int, pageSelection []string, log bool) (types.IntSet, error) {
+	pagesToRemove, err := selectedPages(pageCount, pageSelection, log)
+	if err != nil {
+		return nil, err
+	}
+
+	m := types.IntSet{}
+	for i := 1; i <= pageCount; i++ {
+		m[i] = true
+	}
+
+	for k, v := range pagesToRemove {
+		if v {
+			m[k] = false
+		}
+	}
+
+	return m, nil
+}
+
 func deletePageFromCollection(cp *[]int, p int) {
 	a := []int{}
 	for _, i := range *cp {
@@ -581,10 +601,9 @@ func parsePageRangeForCollection(pr []string, pageCount int, negated bool, cp *[
 	return nil
 }
 
-// PagesForPageCollection returns a slice of page numbers for a page collection.
-// Any page number in any order any number of times allowed.
-func PagesForPageCollection(pageCount int, pageSelection []string) ([]int, error) {
+func calcPagesForPageCollection(pageCount int, pageSelection []string) ([]int, error) {
 	collectedPages := []int{}
+
 	for _, v := range pageSelection {
 
 		if v == "even" {
@@ -650,6 +669,22 @@ func PagesForPageCollection(pageCount int, pageSelection []string) ([]int, error
 			return nil, err
 		}
 	}
+
+	return collectedPages, nil
+}
+
+// PagesForPageCollection returns a slice of page numbers for a page collection.
+// Any page number in any order any number of times allowed.
+func PagesForPageCollection(pageCount int, pageSelection []string) ([]int, error) {
+	collectedPages, err := calcPagesForPageCollection(pageCount, pageSelection)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(collectedPages) == 0 {
+		return nil, errors.Errorf("pdfcpu: no page selected")
+	}
+
 	return collectedPages, nil
 }
 

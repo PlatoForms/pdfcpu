@@ -97,7 +97,7 @@ func TestAddWatermarks(t *testing.T) {
 			true,
 			"text",
 			"Demo",
-			"font:Courier, c: 1 0 0, op:1, sc:1 abs, points:48"},
+			"font:Courier, c: 1 0 0, op:1, scale:1 abs, points:48"},
 
 		// Add image watermark to inFile starting at page 1 using no rotation.
 		{"TestWatermarkImage",
@@ -116,7 +116,7 @@ func TestAddWatermarks(t *testing.T) {
 			true,
 			"image",
 			filepath.Join(resDir, "pdfchip3.png"),
-			"sc:.5 a, rot:-90"},
+			"scale:.5 a, rot:-90"},
 
 		// Add a PDF stamp to all pages of inFile using the 3rd page of pdfFile
 		// and rotate along the 2nd diagonal running from upper left to lower right corner.
@@ -144,8 +144,8 @@ func TestAddWatermarks(t *testing.T) {
 	}
 }
 
-func TestStampingLifecyle(t *testing.T) {
-	msg := "TestStampingLifecyle"
+func TestStampingLifecycle(t *testing.T) {
+	msg := "TestStampingLifecycle"
 	inFile := filepath.Join(inDir, "Acroforms2.pdf")
 	outFile := filepath.Join(outDir, "stampLC.pdf")
 	onTop := true // we are testing stamps

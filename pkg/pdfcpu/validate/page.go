@@ -17,6 +17,8 @@ limitations under the License.
 package validate
 
 import (
+	"strings"
+
 	"github.com/pdfcpu/pdfcpu/pkg/log"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
@@ -102,8 +104,42 @@ func validatePageContents(xRefTable *model.XRefTable, d types.Dict) (hasContents
 
 		}
 
+		if hasContents {
+			break
+		}
+
+		if xRefTable.ValidationMode == model.ValidationStrict {
+			return false, errors.Errorf("validatePageContents: empty page content array detected")
+		}
+
+		// Digest empty array.
+		d.Delete("Contents")
+		model.ShowRepaired("page dict \"Contents\"")
+
+	case types.StringLiteral:
+
+		s := strings.TrimSpace(o.Value())
+
+		if len(s) > 0 || xRefTable.ValidationMode == model.ValidationStrict {
+			return false, errors.Errorf("validatePageContents: page content must be stream dict or array, got: %T", o)
+		}
+
+		// Digest empty string literal.
+		d.Delete("Contents")
+		model.ShowRepaired("page dict \"Contents\"")
+
+	case types.Dict:
+
+		if len(o) > 0 || xRefTable.ValidationMode == model.ValidationStrict {
+			return false, errors.Errorf("validatePageContents: page content must be stream dict or array, got: %T", o)
+		}
+
+		// Digest empty dict.
+		d.Delete("Contents")
+		model.ShowRepaired("page dict \"Contents\"")
+
 	default:
-		return false, errors.Errorf("validatePageContents: page content must be stream dict or array")
+		return false, errors.Errorf("validatePageContents: page content must be stream dict or array, got: %T", o)
 	}
 
 	return hasContents, nil
@@ -471,7 +507,7 @@ func validatePageEntryTabs(xRefTable *model.XRefTable, d types.Dict, required bo
 	validateTabs := func(s string) bool { return types.MemberOf(s, []string{"R", "C", "S", "A", "W"}) }
 
 	if xRefTable.ValidationMode == model.ValidationRelaxed {
-		sinceVersion = model.V14
+		sinceVersion = model.V13
 	}
 	_, err := validateNameEntry(xRefTable, d, "pagesDict", "Tabs", required, sinceVersion, validateTabs)
 
@@ -856,39 +892,31 @@ func validatePageDict(xRefTable *model.XRefTable, d types.Dict, objNumber int, h
 	return nil
 }
 
-func validatePagesDictGeneralEntries(xRefTable *model.XRefTable, d types.Dict) (pageCount int, hasResources, hasMediaBox bool, err error) {
-
-	// PageCount of this sub page tree
-	i := d.IntEntry("Count")
-	if i == nil {
-		return 0, false, false, errors.New("pdfcpu: validatePagesDictGeneralEntries: missing \"Count\" in page tree")
-	}
-	pageCount = *i
-
+func validatePagesDictGeneralEntries(xRefTable *model.XRefTable, d types.Dict) (hasResources, hasMediaBox bool, err error) {
 	hasResources, err = validateResources(xRefTable, d)
 	if err != nil {
-		return 0, false, false, err
+		return false, false, err
 	}
 
 	// MediaBox: optional, rectangle
 	hasMediaBox, err = validatePageEntryMediaBox(xRefTable, d, OPTIONAL, model.V10)
 	if err != nil {
-		return 0, false, false, err
+		return false, false, err
 	}
 
 	// CropBox: optional, rectangle
 	err = validatePageEntryCropBox(xRefTable, d, OPTIONAL, model.V10)
 	if err != nil {
-		return 0, false, false, err
+		return false, false, err
 	}
 
 	// Rotate:  optional, integer
 	err = validatePageEntryRotate(xRefTable, d, OPTIONAL, model.V10)
 	if err != nil {
-		return 0, false, false, err
+		return false, false, err
 	}
 
-	return pageCount, hasResources, hasMediaBox, nil
+	return hasResources, hasMediaBox, nil
 }
 
 func dictTypeForPageNodeDict(d types.Dict) (string, error) {
@@ -906,22 +934,6 @@ func dictTypeForPageNodeDict(d types.Dict) (string, error) {
 }
 
 func validateResources(xRefTable *model.XRefTable, d types.Dict) (hasResources bool, err error) {
-
-	// Get number of pages of this PDF file.
-	pageCount := d.IntEntry("Count")
-	if pageCount == nil {
-		return false, errors.New("pdfcpu: validateResources: missing \"Count\"")
-	}
-
-	// TODO not ideal - overall pageCount is only set during validation!
-	if xRefTable.PageCount == 0 {
-		xRefTable.PageCount = *pageCount
-	}
-
-	if log.ValidateEnabled() {
-		log.Validate.Printf("validateResources: This page node has %d pages\n", *pageCount)
-	}
-
 	// Resources: optional, dict
 	o, ok := d.Find("Resources")
 	if !ok {
@@ -944,6 +956,17 @@ func pagesDictKids(xRefTable *model.XRefTable, d types.Dict) types.Array {
 		return nil
 	}
 	return kids
+}
+
+func validateParent(pageNodeDict types.Dict, objNr int) error {
+	parentIndRef := pageNodeDict.IndirectRefEntry("Parent")
+	if parentIndRef == nil {
+		return errors.New("pdfcpu: validatePagesDict: missing parent node")
+	}
+	if parentIndRef.ObjectNumber.Value() != objNr {
+		return errors.New("pdfcpu: validatePagesDict: corrupt parent node")
+	}
+	return nil
 }
 
 func processPagesKids(xRefTable *model.XRefTable, kids types.Array, objNr int, hasResources, hasMediaBox bool, curPage *int) (types.Array, error) {
@@ -979,12 +1002,8 @@ func processPagesKids(xRefTable *model.XRefTable, kids types.Array, objNr int, h
 			return nil, errors.New("pdfcpu: validatePagesDict: corrupt page node")
 		}
 
-		parentIndRef := pageNodeDict.IndirectRefEntry("Parent")
-		if parentIndRef == nil {
-			return nil, errors.New("pdfcpu: validatePagesDict: missing parent node")
-		}
-		if parentIndRef.ObjectNumber.Value() != objNr {
-			return nil, errors.New("pdfcpu: validatePagesDict: corrupt parent node")
+		if err := validateParent(pageNodeDict, objNr); err != nil {
+			return nil, err
 		}
 
 		dictType, err := dictTypeForPageNodeDict(pageNodeDict)
@@ -1005,6 +1024,9 @@ func processPagesKids(xRefTable *model.XRefTable, kids types.Array, objNr int, h
 			if err = validatePageDict(xRefTable, pageNodeDict, objNumber, hasResources, hasMediaBox); err != nil {
 				return nil, err
 			}
+			if err := xRefTable.SetValid(ir); err != nil {
+				return nil, err
+			}
 
 		default:
 			return nil, errors.Errorf("pdfcpu: validatePagesDict: Unexpected dict type: %s", dictType)
@@ -1016,13 +1038,9 @@ func processPagesKids(xRefTable *model.XRefTable, kids types.Array, objNr int, h
 }
 
 func validatePagesDict(xRefTable *model.XRefTable, d types.Dict, objNr int, hasResources, hasMediaBox bool, curPage *int) error {
-	pageCount, dHasResources, dHasMediaBox, err := validatePagesDictGeneralEntries(xRefTable, d)
+	dHasResources, dHasMediaBox, err := validatePagesDictGeneralEntries(xRefTable, d)
 	if err != nil {
 		return err
-	}
-
-	if pageCount == 0 {
-		return nil
 	}
 
 	if dHasResources {
@@ -1126,13 +1144,7 @@ func validatePages(xRefTable *model.XRefTable, rootDict types.Dict) (types.Dict,
 		if err != nil {
 			return nil, err
 		}
-		msg := "repaired: missing \"Pages\" indirect reference"
-		if log.DebugEnabled() {
-			log.Debug.Println("pdfcpu " + msg)
-		}
-		if log.CLIEnabled() {
-			log.CLI.Println(msg)
-		}
+		model.ShowRepaired("missing \"Pages\" indirect reference")
 	}
 
 	if ok {
@@ -1148,19 +1160,26 @@ func validatePages(xRefTable *model.XRefTable, rootDict types.Dict) (types.Dict,
 		}
 	}
 
-	pageCount := pageRoot.IntEntry("Count")
-	if pageCount == nil {
+	obj, found = pageRoot.Find("Count")
+	if !found {
 		return nil, errors.New("pdfcpu: validatePages: missing \"Count\" in page root dict")
 	}
 
-	i := 0
-	err = validatePagesDict(xRefTable, pageRoot, objNr, false, false, &i)
+	i, err := xRefTable.DereferenceInteger(obj)
+	if err != nil || i == nil {
+		return nil, errors.New("pdfcpu: validatePages: corrupt \"Count\" in page root dict")
+	}
+
+	xRefTable.PageCount = i.Value()
+
+	pc := 0
+	err = validatePagesDict(xRefTable, pageRoot, objNr, false, false, &pc)
 	if err != nil {
 		return nil, err
 	}
 
-	if i != *pageCount {
-		return nil, errors.New("pdfcpu: validatePages: page tree corrupted")
+	if pc != xRefTable.PageCount {
+		return nil, errors.New("pdfcpu: validatePages: page tree invalid")
 	}
 
 	return pageRoot, err

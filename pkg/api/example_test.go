@@ -65,7 +65,7 @@ func ExampleSplitFile() {
 	// Create dual page PDFs for in.pdf in outDir using the default configuration.
 	SplitFile("in.pdf", "outDir", 2, nil)
 
-	// Create a sequence of PDFs representing bookmark secions.
+	// Create a sequence of PDFs representing bookmark sections.
 	SplitFile("in.pdf", "outDir", 0, nil)
 }
 
@@ -84,7 +84,7 @@ func ExampleMergeCreateFile() {
 	// Merge inFiles by concatenation in the order specified and write the result to out.pdf.
 	// out.pdf will be overwritten.
 	inFiles := []string{"in1.pdf", "in2.pdf"}
-	MergeCreateFile(inFiles, "out.pdf", nil)
+	MergeCreateFile(inFiles, "out.pdf", false, nil)
 }
 
 func ExampleMergeAppendFile() {
@@ -92,16 +92,16 @@ func ExampleMergeAppendFile() {
 	// Merge inFiles by concatenation in the order specified and write the result to out.pdf.
 	// If out.pdf already exists it will be preserved and serves as the beginning of the merge result.
 	inFiles := []string{"in1.pdf", "in2.pdf"}
-	MergeAppendFile(inFiles, "out.pdf", nil)
+	MergeAppendFile(inFiles, "out.pdf", false, nil)
 }
 
 func ExampleInsertPagesFile() {
 
 	// Insert a blank page into in.pdf before page #3.
-	InsertPagesFile("in.pdf", "", []string{"3"}, true, nil)
+	InsertPagesFile("in.pdf", "", []string{"3"}, true, nil, nil)
 
 	// Insert a blank page into in.pdf after every page.
-	InsertPagesFile("in.pdf", "", nil, false, nil)
+	InsertPagesFile("in.pdf", "", nil, false, nil, nil)
 }
 
 func ExampleRemovePagesFile() {
@@ -130,7 +130,7 @@ func ExampleAddWatermarksFile() {
 	// Stamp all odd pages of in.pdf in red "Confidential" in 48 point Courier
 	// using a rotation angle of 45 degrees and an absolute scalefactor of 1.0.
 	onTop = true
-	wm, _ = TextWatermark("Confidential", "font:Courier, points:48, col: 1 0 0, rot:45, sc:1 abs, ", onTop, update, types.POINTS)
+	wm, _ = TextWatermark("Confidential", "font:Courier, points:48, col: 1 0 0, rot:45, scale:1 abs, ", onTop, update, types.POINTS)
 	AddWatermarksFile("in.pdf", "", []string{"odd"}, wm, nil)
 
 	// Add image stamps to in.pdf using absolute scaling and a negative rotation of 90 degrees.
@@ -139,7 +139,7 @@ func ExampleAddWatermarksFile() {
 
 	// Add a PDF stamp to all pages of in.pdf using the 2nd page of stamp.pdf, use absolute scaling of 0.5
 	// and rotate along the 2nd diagonal running from upper left to lower right corner.
-	wm, _ = PDFWatermark("stamp.pdf:2", "sc:.5 abs, diagonal:2", onTop, update, types.POINTS)
+	wm, _ = PDFWatermark("stamp.pdf:2", "scale:.5 abs, diagonal:2", onTop, update, types.POINTS)
 	AddWatermarksFile("in.pdf", "", nil, wm, nil)
 }
 
@@ -185,22 +185,22 @@ func ExampleImportImagesFile() {
 func ExampleNUpFile() {
 
 	// 4-Up in.pdf and write result to out.pdf.
-	nup, _ := PDFNUpConfig(4, "")
+	nup, _ := PDFNUpConfig(4, "", nil)
 	inFiles := []string{"in.pdf"}
 	NUpFile(inFiles, "out.pdf", nil, nup, nil)
 
 	// 9-Up a sequence of images using format Tabloid w/o borders and no margins.
-	nup, _ = ImageNUpConfig(9, "f:Tabloid, b:off, m:0")
+	nup, _ = ImageNUpConfig(9, "f:Tabloid, b:off, m:0", nil)
 	inFiles = []string{"in1.png", "in2.jpg", "in3.tiff"}
 	NUpFile(inFiles, "out.pdf", nil, nup, nil)
 
 	// TestGridFromPDF
-	nup, _ = PDFGridConfig(1, 3, "f:LegalL")
+	nup, _ = PDFGridConfig(1, 3, "f:LegalL", nil)
 	inFiles = []string{"in.pdf"}
 	NUpFile(inFiles, "out.pdf", nil, nup, nil)
 
 	// TestGridFromImages
-	nup, _ = ImageGridConfig(4, 2, "d:500 500, m:20, b:off")
+	nup, _ = ImageGridConfig(4, 2, "d:500 500, m:20, b:off", nil)
 	inFiles = []string{"in1.png", "in2.jpg", "in3.tiff"}
 	NUpFile(inFiles, "out.pdf", nil, nup, nil)
 }

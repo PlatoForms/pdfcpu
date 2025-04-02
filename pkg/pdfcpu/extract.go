@@ -18,11 +18,13 @@ package pdfcpu
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/filter"
 	"github.com/pdfcpu/pdfcpu/pkg/log"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/font"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/types"
 	"github.com/pkg/errors"
@@ -33,7 +35,22 @@ import (
 func ImageObjNrs(ctx *model.Context, pageNr int) []int {
 	// TODO Exclude SMask image objects.
 	objNrs := []int{}
-	for k, v := range ctx.Optimize.PageImages[pageNr-1] {
+
+	if pageNr < 1 {
+		return objNrs
+	}
+
+	imgObjNrs := ctx.Optimize.PageImages
+	if len(imgObjNrs) == 0 {
+		return objNrs
+	}
+
+	pageImgObjNrs := imgObjNrs[pageNr-1]
+	if pageImgObjNrs == nil {
+		return objNrs
+	}
+
+	for k, v := range pageImgObjNrs {
 		if v {
 			objNrs = append(objNrs, k)
 		}
@@ -200,6 +217,30 @@ func ColorSpaceComponents(xRefTable *model.XRefTable, sd *types.StreamDict) (int
 	return 0, nil
 }
 
+func imageWidth(ctx *model.Context, sd *types.StreamDict, objNr int) (int, error) {
+	obj, ok := sd.Find("Width")
+	if !ok {
+		return 0, errors.Errorf("pdfcpu: missing image width obj#%d", objNr)
+	}
+	i, err := ctx.DereferenceInteger(obj)
+	if err != nil {
+		return 0, err
+	}
+	return i.Value(), nil
+}
+
+func imageHeight(ctx *model.Context, sd *types.StreamDict, objNr int) (int, error) {
+	obj, ok := sd.Find("Height")
+	if !ok {
+		return 0, errors.Errorf("pdfcpu: missing image height obj#%d", objNr)
+	}
+	i, err := ctx.DereferenceInteger(obj)
+	if err != nil {
+		return 0, err
+	}
+	return i.Value(), nil
+}
+
 func imageStub(
 	ctx *model.Context,
 	sd *types.StreamDict,
@@ -208,14 +249,14 @@ func imageStub(
 	thumb, imgMask bool,
 	objNr int) (*model.Image, error) {
 
-	w := sd.IntEntry("Width")
-	if w == nil {
-		return nil, errors.Errorf("pdfcpu: missing image width obj#%d", objNr)
+	w, err := imageWidth(ctx, sd, objNr)
+	if err != nil {
+		return nil, err
 	}
 
-	h := sd.IntEntry("Height")
-	if h == nil {
-		return nil, errors.Errorf("pdfcpu: missing image height obj#%d", objNr)
+	h, err := imageHeight(ctx, sd, objNr)
+	if err != nil {
+		return nil, err
 	}
 
 	cs, err := ColorSpaceString(ctx, sd)
@@ -255,7 +296,7 @@ func imageStub(
 		interpol = true
 	}
 
-	i, err := StreamLength(ctx, sd)
+	size, err := StreamLength(ctx, sd)
 	if err != nil {
 		return nil, err
 	}
@@ -272,13 +313,13 @@ func imageStub(
 		IsImgMask:   imgMask,
 		HasImgMask:  mask,
 		HasSMask:    sMask,
-		Width:       *w,
-		Height:      *h,
+		Width:       w,
+		Height:      h,
 		Cs:          cs,
 		Comp:        comp,
 		Bpc:         bpc,
 		Interpol:    interpol,
-		Size:        i,
+		Size:        size,
 		Filter:      filters,
 		DecodeParms: s,
 	}
@@ -313,35 +354,7 @@ func prepareExtractImage(sd *types.StreamDict) (string, string, types.Dict, bool
 
 	return filters, lastFilter, d, imgMask
 }
-
-func img(
-	ctx *model.Context,
-	sd *types.StreamDict,
-	thumb, imgMask bool,
-	resourceID, filters, lastFilter string,
-	objNr int) (*model.Image, error) {
-
-	// "ImageMask" is a flag indicating whether the image shall be treated as an image mask.
-	// We do not extract imageMasks with the exception of CCITTDecoded images.
-	if imgMask {
-		// bpc = 1
-		if lastFilter != filter.CCITTFax {
-			if log.InfoEnabled() {
-				log.Info.Printf("ExtractImage(%d): skip img with imageMask\n", objNr)
-			}
-			return nil, nil
-		}
-	}
-
-	// An image XObject defining an image mask to be applied to this image, or an array specifying a range of colours to be applied to it as a colour key mask.
-	// Ignore if image has a Mask defined.
-	if sm, _ := sd.Find("Mask"); sm != nil {
-		if log.InfoEnabled() {
-			log.Info.Printf("ExtractImage(%d): skip image, unsupported \"Mask\"\n", objNr)
-		}
-		return nil, nil
-	}
-
+func decodeImage(ctx *model.Context, sd *types.StreamDict, filters, lastFilter string, objNr int) error {
 	// CCITTDecoded images / (bit) masks don't have a ColorSpace attribute, but we render image files.
 	if lastFilter == filter.CCITTFax {
 		if _, err := ctx.DereferenceDictEntry(sd.Dict, "ColorSpace"); err != nil {
@@ -352,23 +365,45 @@ func img(
 	if lastFilter == filter.DCT {
 		comp, err := ColorSpaceComponents(ctx.XRefTable, sd)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		sd.CSComponents = comp
 	}
 
 	switch lastFilter {
 
-	case filter.DCT, filter.JPX, filter.Flate, filter.CCITTFax, filter.RunLength:
+	case filter.DCT, filter.JPX, filter.Flate, filter.LZW, filter.CCITTFax, filter.RunLength:
 		if err := sd.Decode(); err != nil {
-			return nil, err
+			return err
 		}
 
 	default:
+		msg := fmt.Sprintf("pdfcpu: ExtractImage(obj#%d): skipping img, filter %s unsupported", objNr, filters)
 		if log.DebugEnabled() {
-			log.Debug.Printf("ExtractImage(%d): skip img, filter %s unsupported\n", objNr, filters)
+			log.Debug.Println(msg)
 		}
-		return nil, nil
+		if log.CLIEnabled() {
+			log.CLI.Println(msg)
+		}
+		return nil
+	}
+
+	return nil
+}
+
+func img(
+	ctx *model.Context,
+	sd *types.StreamDict,
+	thumb, imgMask bool,
+	resourceID, filters, lastFilter string,
+	objNr int) (*model.Image, error) {
+
+	if sd.FilterPipeline == nil {
+		sd.Content = sd.Raw
+	} else {
+		if err := decodeImage(ctx, sd, filters, lastFilter, objNr); err != nil {
+			return nil, err
+		}
 	}
 
 	r, t, err := RenderImage(ctx.XRefTable, sd, thumb, resourceID, objNr)
@@ -399,10 +434,6 @@ func ExtractImage(ctx *model.Context, sd *types.StreamDict, thumb bool, resource
 		return imageStub(ctx, sd, resourceID, filters, lastFilter, decodeParms, thumb, imgMask, objNr)
 	}
 
-	if sd.FilterPipeline == nil {
-		return nil, nil
-	}
-
 	return img(ctx, sd, thumb, imgMask, resourceID, filters, lastFilter, objNr)
 }
 
@@ -412,7 +443,7 @@ func ExtractPageImages(ctx *model.Context, pageNr int, stub bool) (map[int]model
 	m := map[int]model.Image{}
 	for _, objNr := range ImageObjNrs(ctx, pageNr) {
 		imageObj := ctx.Optimize.ImageObjects[objNr]
-		img, err := ExtractImage(ctx, imageObj.ImageDict, false, imageObj.ResourceNames[0], objNr, stub)
+		img, err := ExtractImage(ctx, imageObj.ImageDict, false, imageObj.ResourceNames[pageNr-1], objNr, stub)
 		if err != nil {
 			return nil, err
 		}
@@ -451,7 +482,22 @@ type Font struct {
 // Requires an optimized context.
 func FontObjNrs(ctx *model.Context, pageNr int) []int {
 	objNrs := []int{}
-	for k, v := range ctx.Optimize.PageFonts[pageNr-1] {
+
+	if pageNr < 1 {
+		return objNrs
+	}
+
+	fontObjNrs := ctx.Optimize.PageFonts
+	if len(fontObjNrs) == 0 {
+		return objNrs
+	}
+
+	pageFontObjNrs := fontObjNrs[pageNr-1]
+	if pageFontObjNrs == nil {
+		return objNrs
+	}
+
+	for k, v := range pageFontObjNrs {
 		if v {
 			objNrs = append(objNrs, k)
 		}
@@ -461,15 +507,7 @@ func FontObjNrs(ctx *model.Context, pageNr int) []int {
 
 // ExtractFont extracts a font from fontObject.
 func ExtractFont(ctx *model.Context, fontObject model.FontObject, objNr int) (*Font, error) {
-	// Only embedded fonts have binary data.
-	if !fontObject.Embedded() {
-		if log.DebugEnabled() {
-			log.Debug.Printf("ExtractFont: ignoring obj#%d - non embedded font: %s\n", objNr, fontObject.FontName)
-		}
-		return nil, nil
-	}
-
-	d, err := fontDescriptor(ctx.XRefTable, fontObject.FontDict, objNr)
+	d, err := font.FontDescriptor(ctx.XRefTable, fontObject.FontDict, objNr)
 	if err != nil {
 		return nil, err
 	}
@@ -518,8 +556,12 @@ func ExtractFont(ctx *model.Context, fontObject model.FontObject, objNr int) (*F
 		f = &Font{bytes.NewReader(sd.Content), fontObject.FontName, "ttf"}
 
 	default:
+		s := fmt.Sprintf("extractFontData: obj#%d - unsupported fonttype %s -  font: %s\n", objNr, fontType, fontObject.FontName)
 		if log.InfoEnabled() {
-			log.Info.Printf("extractFontData: ignoring obj#%d - unsupported fonttype %s -  font: %s\n", objNr, fontType, fontObject.FontName)
+			log.Info.Println(s)
+		}
+		if log.CLIEnabled() {
+			log.CLI.Printf(s)
 		}
 		return nil, nil
 	}
@@ -528,9 +570,12 @@ func ExtractFont(ctx *model.Context, fontObject model.FontObject, objNr int) (*F
 }
 
 // ExtractPageFonts extracts all fonts used by pageNr.
-func ExtractPageFonts(ctx *model.Context, pageNr int) ([]Font, error) {
+func ExtractPageFonts(ctx *model.Context, pageNr int, objNrs, skipped types.IntSet) ([]Font, error) {
 	ff := []Font{}
 	for _, i := range FontObjNrs(ctx, pageNr) {
+		if objNrs[i] || skipped[i] {
+			continue
+		}
 		fontObject := ctx.Optimize.FontObjects[i]
 		f, err := ExtractFont(ctx, *fontObject, i)
 		if err != nil {
@@ -538,6 +583,9 @@ func ExtractPageFonts(ctx *model.Context, pageNr int) ([]Font, error) {
 		}
 		if f != nil {
 			ff = append(ff, *f)
+			objNrs[i] = true
+		} else {
+			skipped[i] = true
 		}
 	}
 	return ff, nil
@@ -558,14 +606,9 @@ func ExtractFormFonts(ctx *model.Context) ([]Font, error) {
 	return ff, nil
 }
 
-// ExtractPage extracts pageNr into a new single page context.
-func ExtractPage(ctx *model.Context, pageNr int) (*model.Context, error) {
-	return ExtractPages(ctx, []int{pageNr}, false)
-}
-
 // ExtractPages extracts pageNrs into a new single page context.
 func ExtractPages(ctx *model.Context, pageNrs []int, usePgCache bool) (*model.Context, error) {
-	ctxDest, err := CreateContextWithXRefTable(nil, types.PaperSize["A4"])
+	ctxDest, err := CreateContextWithXRefTable(ctx.Conf, types.PaperSize["A4"])
 	if err != nil {
 		return nil, err
 	}

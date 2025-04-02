@@ -18,7 +18,6 @@ package api
 
 import (
 	"io"
-	"time"
 
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
@@ -26,7 +25,7 @@ import (
 )
 
 // PDFInfo returns information about rs.
-func PDFInfo(rs io.ReadSeeker, fileName string, selectedPages []string, conf *model.Configuration) (*pdfcpu.PDFInfo, error) {
+func PDFInfo(rs io.ReadSeeker, fileName string, selectedPages []string, fonts bool, conf *model.Configuration) (*pdfcpu.PDFInfo, error) {
 	if rs == nil {
 		return nil, errors.New("pdfcpu: PDFInfo: missing rs")
 	}
@@ -34,18 +33,19 @@ func PDFInfo(rs io.ReadSeeker, fileName string, selectedPages []string, conf *mo
 	if conf == nil {
 		conf = model.NewDefaultConfiguration()
 	} else {
-		// Validation loads infodict.
 		conf.ValidationMode = model.ValidationRelaxed
 	}
 	conf.Cmd = model.LISTINFO
 
-	ctx, _, _, err := readAndValidate(rs, conf, time.Now())
+	ctx, err := ReadAndValidate(rs, conf)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := ctx.EnsurePageCount(); err != nil {
-		return nil, err
+	if fonts {
+		if err = OptimizeContext(ctx); err != nil {
+			return nil, err
+		}
 	}
 
 	pages, err := PagesForPageSelection(ctx.PageCount, selectedPages, false, true)
@@ -57,5 +57,5 @@ func PDFInfo(rs io.ReadSeeker, fileName string, selectedPages []string, conf *mo
 		return nil, err
 	}
 
-	return pdfcpu.Info(ctx, fileName, pages)
+	return pdfcpu.Info(ctx, fileName, pages, fonts)
 }

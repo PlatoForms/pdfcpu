@@ -29,10 +29,13 @@ import (
 )
 
 type configuration struct {
+	CreationDate                    string `yaml:"created"`
+	Version                         string `yaml:"version"`
 	CheckFileNameExt                bool   `yaml:"checkFileNameExt"`
 	Reader15                        bool   `yaml:"reader15"`
 	DecodeAllStreams                bool   `yaml:"decodeAllStreams"`
 	ValidationMode                  string `yaml:"validationMode"`
+	PostProcessValidate             bool   `yaml:"postProcessValidate"`
 	Eol                             string `yaml:"eol"`
 	WriteObjectStream               bool   `yaml:"writeObjectStream"`
 	WriteXRefStream                 bool   `yaml:"writeXRefStream"`
@@ -43,15 +46,22 @@ type configuration struct {
 	Units                           string `yaml:"units"` // Be flexible if version < v0.3.8
 	TimestampFormat                 string `yaml:"timestampFormat"`
 	DateFormat                      string `yaml:"dateFormat"`
-	HeaderBufSize                   int    `yaml:"headerBufSize"`
-	OptimizeDuplicateContentStreams bool   `yaml:"optimizeDuplicateContentStreams"`
-	CreateBookmarks                 bool   `yaml:"createBookmarks"`
+	Optimize                        bool   `yaml:"optimize"`
+	OptimizeBeforeWriting           bool
+	OptimizeResourceDicts           bool `yaml:"optimizeResourceDicts"`
+	OptimizeDuplicateContentStreams bool `yaml:"optimizeDuplicateContentStreams"`
+	CreateBookmarks                 bool `yaml:"createBookmarks"`
+	NeedAppearances                 bool `yaml:"needAppearances"`
+	Offline                         bool `yaml:"offline"`
+	Timeout                         int  `yaml:"timeout"`
 }
 
 func loadedConfig(c configuration, configPath string) *Configuration {
 	var conf Configuration
 	conf.Path = configPath
 
+	conf.CreationDate = c.CreationDate
+	conf.Version = c.Version
 	conf.CheckFileNameExt = c.CheckFileNameExt
 	conf.Reader15 = c.Reader15
 	conf.DecodeAllStreams = c.DecodeAllStreams
@@ -59,16 +69,16 @@ func loadedConfig(c configuration, configPath string) *Configuration {
 	conf.WriteXRefStream = c.WriteXRefStream
 	conf.EncryptUsingAES = c.EncryptUsingAES
 	conf.EncryptKeyLength = c.EncryptKeyLength
-	conf.Permissions = int16(c.Permissions)
+	conf.Permissions = PermissionFlags(c.Permissions)
 
 	switch c.ValidationMode {
 	case "ValidationStrict":
 		conf.ValidationMode = ValidationStrict
 	case "ValidationRelaxed":
 		conf.ValidationMode = ValidationRelaxed
-	case "ValidationNone":
-		conf.ValidationMode = ValidationNone
 	}
+
+	conf.PostProcessValidate = c.PostProcessValidate
 
 	switch c.Eol {
 	case "EolLF":
@@ -92,9 +102,17 @@ func loadedConfig(c configuration, configPath string) *Configuration {
 
 	conf.TimestampFormat = c.TimestampFormat
 	conf.DateFormat = c.DateFormat
-	conf.HeaderBufSize = c.HeaderBufSize
+	conf.Optimize = c.Optimize
+
+	// TODO add to config.yml
+	conf.OptimizeBeforeWriting = true
+
+	conf.OptimizeResourceDicts = c.OptimizeResourceDicts
 	conf.OptimizeDuplicateContentStreams = c.OptimizeDuplicateContentStreams
 	conf.CreateBookmarks = c.CreateBookmarks
+	conf.NeedAppearances = c.NeedAppearances
+	conf.Offline = c.Offline
+	conf.Timeout = c.Timeout
 
 	return &conf
 }
@@ -114,7 +132,7 @@ func parseConfigFile(r io.Reader, configPath string) error {
 		return err
 	}
 
-	if !types.MemberOf(c.ValidationMode, []string{"ValidationStrict", "ValidationRelaxed", "ValidationNone"}) {
+	if !types.MemberOf(c.ValidationMode, []string{"ValidationStrict", "ValidationRelaxed"}) {
 		return errors.Errorf("invalid validationMode: %s", c.ValidationMode)
 	}
 	if !types.MemberOf(c.Eol, []string{"EolLF", "EolCR", "EolCRLF"}) {
@@ -134,15 +152,7 @@ func parseConfigFile(r io.Reader, configPath string) error {
 		return errors.Errorf("encryptKeyLength possible values: 40, 128, 256, got: %s", c.Unit)
 	}
 
-	// TODO Disable on next release.
-	if c.HeaderBufSize == 0 {
-		c.HeaderBufSize = 100
-	}
-
-	if c.HeaderBufSize < 100 {
-		return errors.Errorf("headerBufSize must be >= 100, got: %d", c.HeaderBufSize)
-	}
-
 	loadedDefaultConfig = loadedConfig(c, configPath)
+
 	return nil
 }
