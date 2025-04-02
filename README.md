@@ -1,3 +1,5 @@
+Since 2025-04-02, PDFCpu offical version 0.91, this project is obsolete. New wasm will be built by PdfcpuBuilder CI from offical repo.
+=====
 * Platoform wasm
 * pkg/pdfcpu/model/configuration.go  line 222 , change ConfigPath to `var ConfigPath string = "disable"`
 * `cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" ./`
